@@ -1,0 +1,23 @@
+# Root
+.env
+.env.*
+*.log
+*.tmp
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Node/Next.js
+node_modules/
+.next/
+dist/
+*.local
+
+# Docker
+docker/*.pid
+.docker/

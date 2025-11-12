@@ -1,0 +1,1 @@
+from .produto import ProdutoCreate, ProdutoRead

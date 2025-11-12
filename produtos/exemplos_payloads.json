@@ -1,0 +1,11 @@
+{
+  "produto_create": {
+    "sku": "ABC-001",
+    "titulo": "Filtro de Ar",
+    "descricao": "Filtro de ar compatível com modelos X",
+    "preco": 99.90,
+    "estoque_atual": 10,
+    "origem": "LOCAL",
+    "status": "ATIVO"
+  }
+}
