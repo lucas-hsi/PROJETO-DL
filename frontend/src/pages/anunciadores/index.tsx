@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react";
-import { apiGet, apiPost } from "@/lib/api";
+import styled from "styled-components";
+import { Button } from "@/components/ui/Button";
+import { Table } from "@/components/ui/Table";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/Card";
+import { apiGet, apiPost, API_URL } from "@/lib/api";
 
 type Produto = {
   sku: string; titulo: string; preco: number; estoque: number;
   origem: string; data_importacao?: string;
 };
+
+const Wrap = styled.div`
+  padding: 24px;
+`;
 
 export default function PainelAnunciadores() {
   const [status, setStatus] = useState<string>("Carregando...");
@@ -24,7 +32,18 @@ export default function PainelAnunciadores() {
   const importarML = async () => {
     try {
       setBusy(true);
-      await apiPost("/estoque/importar-meli");
+      const res = await fetch(`${API_URL}/estoque/importar-meli?limit=100`, { method: "POST" });
+      if (!res.ok) {
+        let msg = `Falha na importação.`;
+        try {
+          const err = await res.json();
+          if (err && err.detail && err.detail.tipo === "ML_AUTH") {
+            msg = `Falha na importação (ML_AUTH ${err.detail.http_status}): verifique credenciais/escopos. Endpoint: ${err.detail.endpoint}`;
+          }
+        } catch {}
+        setStatus(msg);
+        return;
+      }
       await fetchSincronizado();
       setStatus("Importação do Mercado Livre concluída.");
     } catch (e: any) {
@@ -49,50 +68,35 @@ export default function PainelAnunciadores() {
     return () => clearInterval(t);
   }, []);
 
+  const columns = [
+    { key: 'sku' as keyof Produto, header: 'SKU' },
+    { key: 'titulo' as keyof Produto, header: 'Título' },
+    { key: 'preco' as keyof Produto, header: 'Preço', render: (v: number) => `R$ ${v}` },
+    { key: 'estoque' as keyof Produto, header: 'Estoque' },
+    { key: 'origem' as keyof Produto, header: 'Origem' },
+    { key: 'data_importacao' as keyof Produto, header: 'Atualização', render: (v?: string) => v || '-' },
+  ];
+
   return (
-    <div className="p-6 space-y-4">
-      <h1 className="text-2xl font-bold">Anunciadores — Operações</h1>
-
-      <div className="flex gap-2">
-        <button className="px-3 py-2 rounded bg-black text-white disabled:opacity-50"
-          onClick={importarML} disabled={busy}>Importar do Mercado Livre</button>
-
-        <button className="px-3 py-2 rounded bg-black text-white disabled:opacity-50"
-          onClick={publicarShopify} disabled={busy}>Publicar no Shopify</button>
-
-        <button className="px-3 py-2 rounded border" onClick={fetchSincronizado}>Atualizar</button>
-      </div>
-
-      <p className="text-sm text-gray-600">{status}</p>
-
-      <div className="overflow-auto border rounded">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="text-left p-2">SKU</th>
-              <th className="text-left p-2">Título</th>
-              <th className="text-left p-2">Preço</th>
-              <th className="text-left p-2">Estoque</th>
-              <th className="text-left p-2">Origem</th>
-              <th className="text-left p-2">Atualização</th>
-            </tr>
-          </thead>
-          <tbody>
-            {itens.map((p, i) => (
-              <tr key={i} className="border-b hover:bg-gray-50">
-                <td className="p-2">{p.sku}</td>
-                <td className="p-2">{p.titulo}</td>
-                <td className="p-2">R$ {p.preco}</td>
-                <td className="p-2">{p.estoque}</td>
-                <td className="p-2">{p.origem}</td>
-                <td className="p-2">{p.data_importacao || "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Espaço reservado para “Criar Anúncio” e “Otimização” em próximas fases */}
-    </div>
+    <Wrap>
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Anunciadores — Operações</CardTitle>
+            <CardDescription>Ações de sincronização e publicação</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            <Button onClick={importarML} disabled={busy}>Importar do Mercado Livre</Button>
+            <Button onClick={publicarShopify} disabled={busy}>Publicar no Shopify</Button>
+            <Button variant="secondary" onClick={fetchSincronizado}>Atualizar</Button>
+            <a href="/diagnostics" style={{ alignSelf: 'center', fontSize: 13 }}>Ver Diagnóstico</a>
+          </div>
+          <div style={{ fontSize: 13, marginBottom: 12 }}>{status}</div>
+          <Table data={itens} columns={columns} itemsPerPage={20} />
+        </CardContent>
+      </Card>
+    </Wrap>
   );
 }

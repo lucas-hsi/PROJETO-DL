@@ -16,28 +16,40 @@ def _base_headers() -> Dict[str, str]:
 
 def _base_url() -> str:
     settings = get_settings()
-    return settings.SHOPIFY_API_BASE_URL.rstrip("/")
+    domain = settings.SHOPIFY_STORE_DOMAIN
+    version = settings.SHOPIFY_API_VERSION
+    if not domain or not version:
+        raise RuntimeError("Shopify domain ou versão não configurados")
+    return f"https://{domain}/admin/api/{version}"
 
 
 def product_exists(sku: str) -> bool:
     """Verifica se já existe variante com SKU no Shopify.
     Estratégia: varrer produtos e variantes (limitado) e conferir SKU.
     """
-    settings = get_settings()
     url = f"{_base_url()}/products.json?limit=250"
-    try:
-        r = requests.get(url, headers=_base_headers(), timeout=20)
-        r.raise_for_status()
-        products = r.json().get("products", [])
-        for p in products:
-            variants = p.get("variants", [])
-            for v in variants:
-                if v.get("sku") == sku:
-                    return True
-        return False
-    except requests.RequestException as e:
-        logger.error({"event": "shopify_product_exists_error", "error": str(e)})
-        raise
+    retries = 3
+    wait_seconds = 2
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, headers=_base_headers(), timeout=20)
+            if r.status_code == 429:
+                retry_after = int(r.headers.get("Retry-After", wait_seconds))
+                time.sleep(retry_after)
+                continue
+            r.raise_for_status()
+            products = r.json().get("products", [])
+            for p in products:
+                variants = p.get("variants", [])
+                for v in variants:
+                    if v.get("sku") == sku:
+                        return True
+            return False
+        except requests.RequestException as e:
+            logger.error({"event": "shopify_product_exists_error", "error": str(e)})
+            time.sleep(wait_seconds)
+            continue
+    return False
 
 
 def create_product(product_data: Dict) -> Dict:

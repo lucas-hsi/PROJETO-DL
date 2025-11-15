@@ -4,6 +4,7 @@ from sqlalchemy import asc, desc, func
 
 from app.models.produto import Produto
 from app.schemas.produto import ProdutoCreate
+from app.core.logger import logger
 
 
 def create_produto(session: Session, data: ProdutoCreate) -> Produto:
@@ -42,9 +43,13 @@ def save_product(session: Session, data: dict) -> Produto:
         produto.estoque_atual = int(data.get("estoque_atual", produto.estoque_atual or 0))
         produto.origem = data.get("origem", produto.origem)
         produto.status = data.get("status", produto.status)
+        imagens = data.get("imagens")
+        if imagens is not None:
+            produto.imagens = imagens
         session.add(produto)
         session.commit()
         session.refresh(produto)
+        logger.info({"event": "produto_salvo_update", "sku": sku})
         return produto
     # Criar novo
     novo = Produto(
@@ -55,10 +60,12 @@ def save_product(session: Session, data: dict) -> Produto:
         estoque_atual=int(data.get("estoque_atual", 0)),
         origem=data.get("origem", "LOCAL"),
         status=data.get("status", "ATIVO"),
+        imagens=data.get("imagens") or [],
     )
     session.add(novo)
     session.commit()
     session.refresh(novo)
+    logger.info({"event": "produto_salvo_create", "sku": novo.sku})
     return novo
 
 

@@ -2,6 +2,7 @@ services:
   backend:
     build: ./backend
     env_file:
+      - ./.env
       - ./backend/.env
     environment:
       - PYTHONPATH=/app

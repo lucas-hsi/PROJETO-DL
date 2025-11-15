@@ -6,9 +6,17 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
 requests==2.32.3
+aiohttp==3.9.5
 celery==5.4.0
 redis==5.0.8
 python-json-logger==2.0.7
+
+# migrations
+alembic==1.13.2
+
+# auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
 
 # test
 pytest==8.2.1

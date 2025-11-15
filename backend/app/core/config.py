@@ -18,6 +18,10 @@ class Settings(BaseSettings):
 
     MERCADOLIVRE_SEED_LIMIT: int = 10
     ML_IMPORT_LIMIT: int = 100
+    ML_RATE_LIMIT: int = 250
+    ML_IMPORT_BATCH: int = 100
+    ML_FULL_SYNC_BATCH: int = 300
+    ML_FULL_SYNC_MAX: int | None = None
 
     # Shopify
     SHOPIFY_STORE_DOMAIN: str = ""
@@ -35,6 +39,11 @@ class Settings(BaseSettings):
     ML_SELLER_ID: str = ""
     ML_REDIRECT_URI: str = ""
     ML_API_BASE_URL: str = "https://api.mercadolibre.com"
+
+    # JWT
+    JWT_SECRET: str = "changeme-in-.env"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRES_MIN: int = 480
 
     class Config:
         env_file = ".env"

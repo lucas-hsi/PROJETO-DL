@@ -2,6 +2,7 @@ from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 from pydantic import ConfigDict
+from typing import Optional, List
 
 
 class ProdutoCreate(BaseModel):
@@ -23,6 +24,7 @@ class ProdutoRead(BaseModel):
     estoque_atual: int
     origem: str
     status: str
+    imagens: Optional[List[str]] = None
     created_at: datetime
     updated_at: datetime
     # Permite validar a partir de objetos ORM (SQLModel) em Pydantic v2

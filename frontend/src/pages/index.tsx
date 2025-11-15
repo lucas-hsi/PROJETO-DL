@@ -1,23 +1,13 @@
-import React, { useEffect, useState } from "react";
-import { getHealth } from "../lib/api";
-import { HealthCard } from "../components/HealthCard";
+import { useRouter } from 'next/router';
+import { useEffect } from 'react';
 
-export default function HomePage() {
-  const [health, setHealth] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
+export default function Index() {
+  const router = useRouter();
 
   useEffect(() => {
-    getHealth()
-      .then(setHealth)
-      .catch((e) => setError(String(e)));
-  }, []);
+    // Redirecionar para página de login ou dashboard
+    router.push('/login');
+  }, [router]);
 
-  return (
-    <div style={{ maxWidth: 800, margin: "40px auto", fontFamily: "system-ui, Arial" }}>
-      <h1>DL Auto Peças</h1>
-      <p>API Online</p>
-      {error && <pre style={{ color: "red" }}>{error}</pre>}
-      <HealthCard health={health} />
-    </div>
-  );
+  return null;
 }
