@@ -1,0 +1,14 @@
+node_modules
+.git
+.gitignore
+.next
+build
+dist
+__pycache__
+*.pyc
+.env.local
+.env.production.local
+.pytest_cache
+.venv
+venv
+.DS_Store

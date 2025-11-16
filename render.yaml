@@ -1,39 +1,87 @@
 services:
+  - type: pserv
+    name: dl-postgres
+    env: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile.postgres
+    envVars:
+      - key: POSTGRES_USER
+        value: dl_user
+      - key: POSTGRES_PASSWORD
+        generateValue: true
+      - key: POSTGRES_DB
+        value: dl_auto_pecas
+
+  - type: pserv
+    name: dl-redis
+    env: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile.redis
+    healthCheckPath: /
+
   - type: web
     name: dl-backend
-    env: python
+    env: docker
+    plan: starter
     region: oregon
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+    dockerfilePath: ./Dockerfile.backend
+    port: 10000
     envVars:
-      DATABASE_URL: {{ postgres.internalConnectionString }}
-      REDIS_URL: {{ redis.connectionString }}
-      NEXT_PUBLIC_API_URL: https://dl-frontend.onrender.com
-      ML_CLIENT_ID: {{ ML_CLIENT_ID }}
-      ML_CLIENT_SECRET: {{ ML_CLIENT_SECRET }}
-      ML_REFRESH_TOKEN: {{ ML_REFRESH_TOKEN }}
-      ML_SELLER_ID: {{ ML_SELLER_ID }}
-      SHOPIFY_ACCESS_TOKEN: {{ SHOPIFY_ACCESS_TOKEN }}
-      SHOPIFY_STORE_DOMAIN: {{ SHOPIFY_STORE_DOMAIN }}
+      - key: DATABASE_URL
+        fromService:
+          type: pserv
+          name: dl-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: pserv
+          name: dl-redis
+          property: connectionString
+      - key: WORKERS
+        value: "4"
+      - key: ENVIRONMENT
+        value: production
+    autoDeploy: true
+    buildCommand: echo "Building backend..."
 
-  - type: worker
+  - type: background
     name: dl-worker
-    env: python
+    env: docker
+    plan: starter
     region: oregon
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.workers.celery_tasks worker -B -l info
+    dockerfilePath: ./Dockerfile.worker
     envVars:
-      DATABASE_URL: {{ postgres.internalConnectionString }}
-      REDIS_URL: {{ redis.connectionString }}
+      - key: DATABASE_URL
+        fromService:
+          type: pserv
+          name: dl-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: pserv
+          name: dl-redis
+          property: connectionString
+      - key: ENVIRONMENT
+        value: production
+    autoDeploy: true
 
   - type: web
     name: dl-frontend
-    env: node
+    env: docker
+    plan: starter
     region: oregon
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile.frontend
+    port: 3000
     envVars:
-      NEXT_PUBLIC_API_URL: https://dl-backend.onrender.com
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: dl-backend
+          property: url
+      - key: NODE_ENV
+        value: production
+    autoDeploy: true
+    buildCommand: npm run build
+    startCommand: npm start
