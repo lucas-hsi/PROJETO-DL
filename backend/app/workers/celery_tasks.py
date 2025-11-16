@@ -23,7 +23,8 @@ celery = _celery_app
 @celery.task(name="ml.refresh_token")
 def refresh_ml_token_task():
     try:
-        token = get_access_token()
+        # Usar Client Credentials para renovação automática
+        token = get_access_token("read")
         logger.info({"event": "ml_token_refreshed_task", "preview": token[:6] + "***"})
         return True
     except Exception as e:

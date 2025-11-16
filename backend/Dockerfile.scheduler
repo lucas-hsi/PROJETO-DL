@@ -1,0 +1,39 @@
+# Dockerfile para o Scheduler de Importações
+FROM python:3.11-slim
+
+# Configurar ambiente
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Instalar dependências do sistema
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Criar diretório
+WORKDIR /app
+
+# Copiar requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copiar código
+COPY . .
+
+# Criar diretório de logs
+RUN mkdir -p logs
+
+# Criar script de entrada
+RUN echo '#!/bin/bash\n\
+cd /app\n\
+echo "🚀 Iniciando scheduler de importações..."\n\
+# Aguardar backend estar pronto\n\
+sleep 30\n\
+# Executar comando passado\n\
+exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Comando padrão (pode ser sobrescrito)
+CMD ["python", "scheduler.py", "test"]

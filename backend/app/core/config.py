@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRES_MIN: int = 480
 
+    # Webhooks
+    WEBHOOK_SECRET: str = "dl-auto-pecas-webhook-secret-2024"
+    BACKEND_URL: str = "http://localhost:8000"
+
     class Config:
         env_file = ".env"
         case_sensitive = False

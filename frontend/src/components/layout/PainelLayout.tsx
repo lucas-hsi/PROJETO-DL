@@ -144,13 +144,32 @@ const Main = styled.div`
   @media (min-width: 1024px) { margin-left: 288px; }
 `;
 
-const HeaderGlass = styled(motion.div)`
+const HeaderGlass = styled(motion.div)<{ $anunciador?: boolean }>`
   margin: 16px;
-  background: ${colors.card};
-  backdrop-filter: blur(14px);
-  border-radius: ${radius.lg};
-  box-shadow: ${shadows.base};
-  border: 1px solid ${colors.border};
+  background: ${({ $anunciador }) =>
+    $anunciador
+      ? 'linear-gradient(135deg, #5B2EFF 0%, #9E7BFF 100%)'
+      : colors.card};
+  backdrop-filter: ${({ $anunciador }) => ($anunciador ? 'none' : 'blur(14px)')};
+  border-radius: 16px;
+  box-shadow: ${({ $anunciador }) =>
+    $anunciador ? '0 10px 25px rgba(91, 46, 255, 0.15)' : shadows.base};
+  border: ${({ $anunciador }) => ($anunciador ? 'none' : `1px solid ${colors.border}`)};
+  position: relative;
+  overflow: hidden;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 120px;
+    height: 120px;
+    background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+    border-radius: 50%;
+    transform: translate(30px, -30px);
+    pointer-events: none;
+  }
 `;
 
 const HeaderInner = styled.div`
@@ -160,17 +179,19 @@ const HeaderInner = styled.div`
   padding: 24px;
 `;
 
-const PageTitle = styled.h1`
-  font-size: 20px;
+const PageTitle = styled.h1<{ $anunciador?: boolean }>`
+  font-size: 28px;
   font-weight: ${typography.weightSemibold};
-  color: ${colors.textDark};
+  color: ${({ $anunciador }) => ($anunciador ? '#FFFFFF' : colors.textDark)};
+  letter-spacing: -0.5px;
 `;
 
-const PageSub = styled.p`
-  font-size: 13px;
-  color: ${colors.textLight};
+const PageSub = styled.p<{ $anunciador?: boolean }>`
+  font-size: 14px;
+  color: ${({ $anunciador }) => ($anunciador ? 'rgba(255, 255, 255, 0.75)' : colors.textLight)};
   text-transform: capitalize;
   margin-top: 4px;
+  font-weight: ${typography.weightMedium};
 `;
 
 const ContentPad = styled.div`
@@ -302,17 +323,39 @@ export default function PainelLayout({ children, titulo, tipoUsuario }: PainelLa
       </AnimatePresence>
 
       <Main>
-        <HeaderGlass initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
+        <HeaderGlass $anunciador={tipoUsuario === 'anunciador'} initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
           <HeaderInner>
             <div>
-              <PageTitle>{titulo}</PageTitle>
-              <PageSub>Painel do {tipoUsuario === 'vendedor' ? 'Vendedor' : tipoUsuario === 'anunciador' ? 'Anunciador' : 'Gestor'}</PageSub>
+              <PageTitle $anunciador={tipoUsuario === 'anunciador'}>{titulo}</PageTitle>
+              <PageSub $anunciador={tipoUsuario === 'anunciador'}>
+                Painel do {tipoUsuario === 'vendedor' ? 'Vendedor' : tipoUsuario === 'anunciador' ? 'Anunciador' : 'Gestor'}
+              </PageSub>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 999, background: 'rgba(99,102,241,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <User size={16} color={colors.secondary} />
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 999,
+                  background:
+                    tipoUsuario === 'anunciador' ? 'rgba(255,255,255,0.2)' : 'rgba(99,102,241,0.2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <User size={16} color={tipoUsuario === 'anunciador' ? '#FFFFFF' : colors.secondary} />
               </div>
-              <span style={{ fontSize: 14, fontWeight: typography.weightMedium, color: colors.textDark, display: 'none' }}>Usuário</span>
+              <span
+                style={{
+                  fontSize: 14,
+                  fontWeight: typography.weightMedium,
+                  color: tipoUsuario === 'anunciador' ? '#FFFFFF' : colors.textDark,
+                  display: 'none',
+                }}
+              >
+                Usuário
+              </span>
             </div>
           </HeaderInner>
         </HeaderGlass>

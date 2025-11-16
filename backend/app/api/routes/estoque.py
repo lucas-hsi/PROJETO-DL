@@ -32,25 +32,50 @@ router = APIRouter(prefix="/estoque")
 def get_estoque(
     session: Session = Depends(get_session),
     page: int = Query(1, ge=1),
-    size: int = Query(10, ge=1, le=100),
+    size: int = Query(10, ge=1, le=500),
     sort_by: str = Query("created_at"),
     sort_dir: str = Query("desc"),
     origem: str | None = Query(None),
+    search: str | None = Query(None),
+    status: str | None = Query(None),
 ):
+    from app.models.produto import Produto
+    sort_col = getattr(Produto, sort_by, Produto.created_at)
+    order = desc(sort_col) if sort_dir.lower() == "desc" else asc(sort_col)
+    
+    # Build the base query with filters
+    query = select(Produto)
+    count_query = select(func.count()).select_from(Produto)
+    
+    # Apply filters
     if origem:
-        from app.models.produto import Produto
-        sort_col = getattr(Produto, sort_by, Produto.created_at)
-        order = desc(sort_col) if sort_dir.lower() == "desc" else asc(sort_col)
-        total = session.exec(select(func.count()).select_from(Produto).where(Produto.origem == origem)).one()
-        query = select(Produto).where(Produto.origem == origem).order_by(order).offset((page - 1) * size).limit(size)
-        items = session.exec(query).all()
-    else:
-        items, total = list_produtos(session, page=page, size=size, sort_by=sort_by, sort_dir=sort_dir)
+        query = query.where(Produto.origem == origem)
+        count_query = count_query.where(Produto.origem == origem)
+    
+    if search:
+        search_filter = (
+            (Produto.sku.ilike(f"%{search}%")) |
+            (Produto.titulo.ilike(f"%{search}%"))
+        )
+        query = query.where(search_filter)
+        count_query = count_query.where(search_filter)
+    
+    if status:
+        query = query.where(Produto.status == status.upper())
+        count_query = count_query.where(Produto.status == status.upper())
+    
+    # Get total count
+    total = session.exec(count_query).one()
+    
+    # Apply pagination and ordering
+    query = query.order_by(order).offset((page - 1) * size).limit(size)
+    items = session.exec(query).all()
     return {
         "items": [ProdutoRead.model_validate(i).model_dump() for i in items],
         "page": page,
         "size": size,
         "total": total,
+        "total_pages": (total + size - 1) // size,  # Ceiling division
     }
 
 

@@ -17,6 +17,7 @@ from app.api.routes import meli_auth
 from app.api.routes import meli_test
 from app.api.routes import diagnostics
 from app.api.routes import meli_sync
+from app.api.routes import meli_token
 from app.core.database import init_db, engine
 from sqlmodel import Session
 from sqlalchemy import text
@@ -68,6 +69,26 @@ def on_startup():
             create_if_not_exists(session, "gestor@dl.com", "123456", "gestor")
     except Exception:
         pass
+    
+    # Inicia o monitoramento de tokens em background
+    try:
+        import asyncio
+        from app.services.token_monitor import start_token_monitor
+        
+        def start_monitor():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(start_token_monitor())
+            loop.close()
+        
+        # Executa em thread separada para não bloquear o startup
+        import threading
+        monitor_thread = threading.Thread(target=start_monitor, daemon=True)
+        monitor_thread.start()
+        
+        logger.info("Monitoramento de tokens iniciado em background")
+    except Exception as e:
+        logger.error(f"Erro ao iniciar monitoramento de tokens: {e}")
 
 
 @app.on_event("shutdown")
@@ -82,6 +103,11 @@ app.include_router(meli_test.router, tags=["Mercado Livre Test"])
 app.include_router(diagnostics.router, tags=["Diagnostics"])
 app.include_router(auth.router, tags=["Auth"])
 app.include_router(meli_sync.router, tags=["Meli Sync"])
+app.include_router(meli_token.router, tags=["Mercado Livre - Token Management"])
+
+# Importar e adicionar rotas de webhooks
+from app.api.routes import webhooks
+app.include_router(webhooks.router, tags=["Webhooks"], prefix="/api")
 
 db_health = APIRouter()
 

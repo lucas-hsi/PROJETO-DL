@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import threading
+import random
 
 import requests
 import aiohttp
@@ -11,6 +12,12 @@ from app.core.logger import logger
 from app.models.ml_log import MLLog
 from app.core.database import get_session
 from app.services.meli_hash_utils import compute_meli_item_hash
+from app.services.ml_token_manager import (
+    ml_token_manager, 
+    get_ml_token, 
+    check_ml_token_status,
+    notify_ml_token_renewal
+)
 from app.repositories.meli_item_snapshot_repo import (
     get_snapshot_by_meli_id,
     get_snapshot_by_sku,
@@ -22,41 +29,154 @@ from app.repositories.meli_item_snapshot_repo import (
 _tg_exchange_lock = threading.Lock()
 
 
-def get_access_token() -> str:
-    settings = get_settings()
-    current = getattr(settings, "ML_ACCESS_TOKEN", "")
-    refresh = getattr(settings, "ML_REFRESH_TOKEN", "")
-    if current:
+def retry_with_backoff(func, max_retries=3, base_delay=1, max_delay=60):
+    """
+    Retry function with exponential backoff and jitter.
+    
+    Args:
+        func: Function to retry
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial delay in seconds
+        max_delay: Maximum delay in seconds
+    
+    Returns:
+        Function result or raises last exception
+    """
+    for attempt in range(max_retries):
         try:
-            r = requests.get(f"{getattr(settings, 'ML_API_BASE_URL', 'https://api.mercadolibre.com')}/users/me", headers={"Authorization": f"Bearer {current}"}, timeout=10)
-            if r.status_code == 401:
-                new_access, new_refresh = refresh_access_token()
-                if not new_access:
-                    raise MeliAuthError(401, f"{getattr(settings, 'ML_API_BASE_URL', 'https://api.mercadolibre.com')}/oauth/token", "invalid_grant ou token expirado")
-                setattr(settings, "ML_ACCESS_TOKEN", new_access)
-                if new_refresh:
-                    setattr(settings, "ML_REFRESH_TOKEN", new_refresh)
-                return new_access
-            r.raise_for_status()
-            logger.info({
-                "event": "ML_ACCESS_TOKEN_USED",
-                "status": "sucesso",
-                "timestamp": datetime.utcnow().isoformat()
+            return func()
+        except MeliAuthError as e:
+            if attempt == max_retries - 1:
+                logger.error({
+                    "event": "ML_RETRY_EXHAUSTED",
+                    "error": str(e),
+                    "attempts": max_retries
+                })
+                raise
+            
+            # Calculate delay with exponential backoff and jitter
+            delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+            
+            logger.warning({
+                "event": "ML_RETRY_ATTEMPT",
+                "attempt": attempt + 1,
+                "max_retries": max_retries,
+                "delay": delay,
+                "error": str(e)
             })
-            return current
-        except requests.RequestException:
-            new_access, new_refresh = refresh_access_token()
-            if not new_access:
-                raise MeliAuthError(401, f"{getattr(settings, 'ML_API_BASE_URL', 'https://api.mercadolibre.com')}/oauth/token", "invalid_grant ou token expirado")
-            setattr(settings, "ML_ACCESS_TOKEN", new_access)
-            if new_refresh:
-                setattr(settings, "ML_REFRESH_TOKEN", new_refresh)
-            return new_access
+            
+            time.sleep(delay)
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error({
+                    "event": "ML_RETRY_EXHAUSTED_GENERIC",
+                    "error": str(e),
+                    "attempts": max_retries
+                })
+                raise
+            
+            # Generic retry with shorter delay
+            delay = min(base_delay * (2 ** attempt), max_delay // 2)
+            
+            logger.warning({
+                "event": "ML_RETRY_ATTEMPT_GENERIC",
+                "attempt": attempt + 1,
+                "max_retries": max_retries,
+                "delay": delay,
+                "error": str(e)
+            })
+            
+            time.sleep(delay)
 
-    new_access, _ = refresh_access_token()
-    if not new_access:
-        raise MeliAuthError(401, f"{getattr(settings, 'ML_API_BASE_URL', 'https://api.mercadolibre.com')}/oauth/token", "invalid_grant ou token expirado")
-    return new_access
+
+def get_access_token(operation_type: str = "read") -> str:
+    """
+    Obtém o token de acesso usando o novo sistema permanente.
+    
+    Args:
+        operation_type: "read" para leitura (usa Client Credentials), "write" para escrita
+    
+    Returns:
+        Token válido para a operação
+    """
+    # Verificar status dos tokens
+    token_status = check_ml_token_status()
+    
+    # Notificar se renovação está próxima
+    if token_status.get("needs_renewal"):
+        notify_ml_token_renewal()
+    
+    def _get_token_internal():
+        try:
+            # Usar novo sistema de tokens
+            token = get_ml_token(operation_type)
+            
+            if not token:
+                # Se não conseguiu token, tentar client credentials
+                if operation_type == "read":
+                    logger.warning({
+                        "event": "ML_FALLBACK_TO_CLIENT_CREDENTIALS",
+                        "message": "Usando Client Credentials como fallback para leitura"
+                    })
+                    token = ml_token_manager.get_client_credentials_token()
+                
+                if not token:
+                    raise MeliAuthError(401, "api.mercadolibre.com/oauth/token", "Nenhum token válido disponível")
+            
+            # Testar token (apenas para Authorization Code, não para Client Credentials)
+            if operation_type == "write":
+                # Para operações de escrita, testar com endpoint que requer Authorization Code
+                try:
+                    test_response = requests.get(
+                        "https://api.mercadolibre.com/users/me",
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=15
+                    )
+                    
+                    if test_response.status_code == 401:
+                        logger.error({
+                            "event": "ML_TOKEN_TEST_FAILED",
+                            "operation_type": operation_type,
+                            "status": test_response.status_code
+                        })
+                        raise MeliAuthError(401, "api.mercadolibre.com/users/me", "Token inválido ou expirado")
+                    
+                    logger.info({
+                        "event": "ML_ACCESS_TOKEN_VALID",
+                        "operation_type": operation_type,
+                        "status": "sucesso",
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    
+                except requests.exceptions.RequestException as e:
+                    logger.error({
+                        "event": "ML_TOKEN_TEST_ERROR",
+                        "operation_type": operation_type,
+                        "error": str(e)
+                    })
+                    raise MeliAuthError(500, "api.mercadolibre.com/users/me", f"Erro ao testar token: {e}")
+            else:
+                # Para Client Credentials (leitura), apenas logar que está válido
+                logger.info({
+                    "event": "ML_ACCESS_TOKEN_VALID",
+                    "operation_type": operation_type,
+                    "token_type": "client_credentials",
+                    "status": "sucesso",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+            
+            return token
+                
+        except requests.RequestException as e:
+            logger.error({
+                "event": "ML_TOKEN_TEST_ERROR",
+                "error": str(e),
+                "operation_type": operation_type
+            })
+            raise MeliAuthError(500, "api.mercadolibre.com/users/me", f"Erro ao testar token: {e}")
+    
+    # Usar retry com backoff
+    return retry_with_backoff(_get_token_internal, max_retries=5, base_delay=2, max_delay=120)
 
 
 class MeliAuthError(Exception):
@@ -68,72 +188,134 @@ class MeliAuthError(Exception):
 
 
 def refresh_access_token() -> tuple[str | None, str | None]:
+    """
+    Renova o token de acesso usando o refresh token, com retry automático.
+    """
     settings = get_settings()
-    url = f"{settings.ML_API_BASE_URL}/oauth/token"
-    if isinstance(settings.ML_REFRESH_TOKEN, str) and settings.ML_REFRESH_TOKEN.startswith("TG-"):
-        return None, None
-    payload = {
-        "grant_type": "refresh_token",
-        "client_id": settings.ML_CLIENT_ID,
-        "client_secret": settings.ML_CLIENT_SECRET,
-        "refresh_token": settings.ML_REFRESH_TOKEN,
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    try:
-        resp = requests.post(url, data=payload, headers=headers, timeout=15)
-        status_code = resp.status_code
-        body = {}
-        try:
-            body = resp.json()
-        except ValueError:
-            body = {"raw": resp.text}
-        if status_code >= 400:
+    
+    def _refresh_token_internal() -> tuple[str | None, str | None]:
+        url = f"{settings.ML_API_BASE_URL}/oauth/token"
+        
+        # Verifica se o refresh token é válido
+        if not settings.ML_REFRESH_TOKEN or (isinstance(settings.ML_REFRESH_TOKEN, str) and settings.ML_REFRESH_TOKEN.startswith("TG-")):
             logger.error({
-                "event": "IMPORT_MELI_TOKEN_REFRESH_FAIL",
-                "status": status_code,
-                "url": url,
-                "body": body,
+                "event": "ML_REFRESH_TOKEN_INVALID",
+                "refresh_token": "TG-*" if settings.ML_REFRESH_TOKEN else "None"
             })
-            err = str(body)
-            if "invalid_grant" in err:
-                raise MeliAuthError(status_code, url, "invalid_grant")
             return None, None
-        data = body
-        new_access = data.get("access_token")
-        new_refresh = data.get("refresh_token")
-        masked = dict(data)
-        if "access_token" in masked and isinstance(masked["access_token"], str):
-            masked["access_token"] = masked["access_token"][:6] + "***"
-        if "refresh_token" in masked and isinstance(masked["refresh_token"], str):
-            masked["refresh_token"] = masked["refresh_token"][:6] + "***"
-        if new_access:
+            
+        payload = {
+            "grant_type": "refresh_token",
+            "client_id": settings.ML_CLIENT_ID,
+            "client_secret": settings.ML_CLIENT_SECRET,
+            "refresh_token": settings.ML_REFRESH_TOKEN,
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        
+        try:
             logger.info({
-                "event": "IMPORT_MELI_TOKEN_REFRESH_OK",
-                "status": status_code,
+                "event": "ML_REFRESH_TOKEN_ATTEMPT",
                 "url": url,
-                "body": masked,
+                "refresh_token_preview": settings.ML_REFRESH_TOKEN[:10] + "..." if len(settings.ML_REFRESH_TOKEN) > 10 else settings.ML_REFRESH_TOKEN
             })
+            
+            resp = requests.post(url, data=payload, headers=headers, timeout=30)
+            status_code = resp.status_code
+            
+            body = {}
             try:
-                from app.api.routes.meli_auth import _persist_tokens_to_env
-                if new_access:
-                    setattr(settings, "ML_ACCESS_TOKEN", new_access)
-                if new_refresh:
-                    setattr(settings, "ML_REFRESH_TOKEN", new_refresh)
-                _persist_tokens_to_env(new_access, new_refresh)
-            except Exception as e:
-                logger.error({"event": "ML_REFRESH_PERSIST_FAIL", "error": str(e)})
-            return new_access, new_refresh
-        logger.warning({"event": "IMPORT_MELI_TOKEN_REFRESH_FAIL", "status": status_code, "body": masked})
-        return None, None
+                body = resp.json()
+            except ValueError:
+                body = {"raw": resp.text}
+                
+            if status_code >= 400:
+                logger.error({
+                    "event": "IMPORT_MELI_TOKEN_REFRESH_FAIL",
+                    "status": status_code,
+                    "url": url,
+                    "body": body,
+                })
+                
+                err = str(body)
+                if "invalid_grant" in err:
+                    logger.error({
+                        "event": "ML_INVALID_GRANT_ERROR",
+                        "message": "Refresh token inválido ou expirado. Necessário reautenticação.",
+                        "body": body
+                    })
+                    raise MeliAuthError(status_code, url, "invalid_grant")
+                elif "invalid_request" in err:
+                    logger.error({
+                        "event": "ML_INVALID_REQUEST_ERROR",
+                        "message": "Requisição inválida ao tentar renovar token",
+                        "body": body
+                    })
+                    raise MeliAuthError(status_code, url, "invalid_request")
+                else:
+                    # Outros erros 4xx/5xx - tenta novamente com retry
+                    raise MeliAuthError(status_code, url, f"HTTP {status_code}: {err}")
+                    
+            data = body
+            new_access = data.get("access_token")
+            new_refresh = data.get("refresh_token")
+            
+            # Mascara tokens para logging
+            masked = dict(data)
+            if "access_token" in masked and isinstance(masked["access_token"], str):
+                masked["access_token"] = masked["access_token"][:6] + "***"
+            if "refresh_token" in masked and isinstance(masked["refresh_token"], str):
+                masked["refresh_token"] = masked["refresh_token"][:6] + "***"
+                
+            if new_access:
+                logger.info({
+                    "event": "IMPORT_MELI_TOKEN_REFRESH_OK",
+                    "status": status_code,
+                    "url": url,
+                    "body": masked,
+                })
+                
+                try:
+                    from app.api.routes.meli_auth import _persist_tokens_to_env
+                    if new_access:
+                        setattr(settings, "ML_ACCESS_TOKEN", new_access)
+                    if new_refresh:
+                        setattr(settings, "ML_REFRESH_TOKEN", new_refresh)
+                    _persist_tokens_to_env(new_access, new_refresh)
+                    
+                    logger.info({
+                        "event": "ML_TOKENS_PERSISTED",
+                        "access_token_preview": new_access[:6] + "***" if len(new_access) > 6 else "***",
+                        "refresh_token_preview": new_refresh[:6] + "***" if new_refresh and len(new_refresh) > 6 else "None"
+                    })
+                    
+                except Exception as e:
+                    logger.error({"event": "ML_REFRESH_PERSIST_FAIL", "error": str(e)})
+                    
+                return new_access, new_refresh
+            else:
+                logger.warning({"event": "IMPORT_MELI_TOKEN_REFRESH_FAIL", "status": status_code, "body": masked})
+                return None, None
 
-    except requests.exceptions.RequestException as e:
-        logger.error({
-            "event": "IMPORT_MELI_TOKEN_REFRESH_FAIL",
-            "error": str(e),
-            "response": getattr(e.response, "text", None),
-            "url": url,
-        })
-        return None, None
+        except requests.exceptions.RequestException as e:
+            logger.error({
+                "event": "IMPORT_MELI_TOKEN_REFRESH_NETWORK_FAIL",
+                "error": str(e),
+                "response": getattr(e.response, "text", None),
+                "url": url,
+            })
+            raise  # Re-raise para o retry mechanism capturar
+            
+    # Usa retry com backoff exponencial para renovação do token
+    try:
+        return retry_with_backoff(_refresh_token_internal, max_retries=3, base_delay=5, max_delay=60)
+    except MeliAuthError as e:
+        if "invalid_grant" in str(e):
+            logger.error({
+                "event": "ML_REFRESH_TOKEN_EXPIRED",
+                "message": "Refresh token expirado. É necessário reautenticar com Mercado Livre.",
+                "action_required": "Acesse /api/meli/auth para reautenticar"
+            })
+        raise
 
 def exchange_tg_for_access_token(tg: str) -> str:
     settings = get_settings()
@@ -211,7 +393,7 @@ def get_meli_products(limit: Optional[int] = None) -> List[Dict]:
     Respeita 429 (Retry-After) e limita a 100 por execução (configurável).
     """
     settings = get_settings()
-    token = get_access_token()
+    token = get_access_token("read")  # Explicitamente usar leitura com Client Credentials
     seller_id = settings.ML_SELLER_ID
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -358,7 +540,7 @@ async def _fetch_json(session: aiohttp.ClientSession, url: str, headers: Dict[st
 async def meli_request(method: str, endpoint: str, params: Optional[Dict] = None, session: Optional[aiohttp.ClientSession] = None, rl: Optional[RateLimiter] = None) -> Dict:
     settings = get_settings()
     base = getattr(settings, "ML_API_BASE_URL", "https://api.mercadolibre.com")
-    token = get_access_token()
+    token = get_access_token("read")  # Explicitamente usar leitura com Client Credentials
     headers = {"Authorization": f"Bearer {token}"}
     logger.info({"event": "ML_API_REQUEST", "method": method, "endpoint": endpoint, "params": params})
     if endpoint.startswith("http"):
@@ -755,6 +937,11 @@ async def importar_meli_incremental_async(since_date: str, hours: int = 24) -> T
 
     # Busca IDs com filtro de data (last_updated)
     while True:
+        # Validar limite de offset do Mercado Livre (máximo 1000)
+        if offset >= 1000:
+            logger.warning({"event": "ML_OFFSET_LIMIT_REACHED", "offset": offset, "message": "Atingido limite máximo de offset (1000) da API do Mercado Livre. Considere usar search_type=scan para mais resultados."})
+            break
+            
         # Busca produtos atualizados recentemente (ativos e inativos)
         payload = await meli_request("GET", f"/users/{seller_id}/items/search", 
                                    params={
@@ -773,7 +960,7 @@ async def importar_meli_incremental_async(since_date: str, hours: int = 24) -> T
             
         collected_ids.extend(ids)
         offset += batch_size
-        logger.info({"event": "IMPORT_MELI_INCREMENTAL_PAGE", "page": page_num, "count": len(ids), "total_coletado": len(collected_ids)})
+        logger.info({"event": "IMPORT_MELI_INCREMENTAL_PAGE", "page": page_num, "count": len(ids), "total_coletado": len(collected_ids), "offset": offset})
         page_num += 1
         
         # Se pegou menos que batch_size, é a última página
@@ -799,63 +986,123 @@ async def importar_meli_todos_status_async(limit: Optional[int] = None, dias: Op
     """
     Busca TODOS os produtos do Mercado Livre independente do status (ativo, vendido, pausado, etc).
     Ideal para sincronização completa de inventários grandes (17k+ produtos).
+    
+    🚨 CORRIGIDO: Agora usa múltiplas estratégias para contornar o limite de offset 1000
     """
+    from app.services.meli_paginacao_fix import corrigir_paginacao_meli
+    
     settings = get_settings()
     seller_id = settings.ML_SELLER_ID
-    batch_size = 50  # Limite do ML para items/search
-    max_limit = limit or 20000  # Default 20k para cobrir 17k+ produtos
-    collected_ids = []
-    offset = 0
-    page_num = 1
-
-    # Busca IDs sem filtro de status para pegar TODOS os produtos
-    while len(collected_ids) < max_limit:
-        # Primeiro tenta ativos
-        payload_active = await meli_request("GET", f"/users/{seller_id}/items/search", 
-                                          params={"limit": batch_size, "offset": offset, "status": "active"})
-        ids_active = payload_active.get("results", []) if payload_active else []
-        
-        # Depois busca inativos/encerrados em uma página separada
-        payload_inactive = await meli_request("GET", f"/users/{seller_id}/items/search", 
-                                            params={"limit": batch_size, "offset": offset, "status": "closed"})
-        ids_inactive = payload_inactive.get("results", []) if payload_inactive else []
-        
-        # Combina e remove duplicados
-        all_page_ids = list(set(ids_active + ids_inactive))
-        
-        if not all_page_ids:
-            break
-            
-        collected_ids.extend(all_page_ids)
-        offset += batch_size
-        logger.info({"event": "IMPORT_MELI_TODOS_STATUS_PAGE", "page": page_num, "active": len(ids_active), "inactive": len(ids_inactive), "total_coletado": len(collected_ids)})
-        page_num += 1
-        
-        if len(collected_ids) >= max_limit:
-            collected_ids = collected_ids[:max_limit]
-            break
-
-    # Busca detalhes de cada item com controle de taxa
-    async def fetch_item(item_id: str) -> Optional[Dict]:
-        return await meli_request("GET", f"/items/{item_id}", params={"include_attributes": "all"})
-
-    tasks = [fetch_item(i) for i in collected_ids]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    items: List[Dict] = []
+    max_limit = limit or 50000  # Default 50k para cobrir 17k+ produtos
     
-    for r in results:
-        if isinstance(r, dict):
-            # Não filtra por status aqui - queremos TODOS os produtos
-            if dias:
-                last_updated = r.get("last_updated") or r.get("stop_time")
-                try:
-                    if last_updated:
-                        dt = datetime.fromisoformat(last_updated.replace("Z", "+00:00")).replace(tzinfo=None)
-                        if dt < datetime.utcnow() - timedelta(days=int(dias)):
-                            continue
-                except Exception:
-                    pass
-            items.append(r)
+    print(f"🚀 Iniciando busca corrigida para {max_limit} produtos do seller {seller_id}")
+    
+    # 🎯 NOVA ESTRATÉGIA: Usar paginação corrigida que contorna o limite 1000
+    collected_ids, total_encontrado = await corrigir_paginacao_meli(max_limit)
+    
+    print(f"📊 Total de IDs únicos encontrados: {len(collected_ids)}")
+    
+    # Se não encontrou muitos produtos, tentar estratégia alternativa
+    if len(collected_ids) < 1000:
+        print("⚠️ Poucos produtos encontrados, tentando estratégia de categorias...")
+        # Buscar por categorias de auto peças principais
+        categorias_auto = [
+            "MLA5725",   # Acessórios para Veículos
+            "MLA1744",   # Autos, Motos y Otros  
+            "MLA11830",  # Repuestos y Accesorios
+            "MLA119440", # Accesorios de Auto y Camioneta
+            "MLA119441", # Accesorios para Motos
+            "MLA119442", # Herramientas para Vehículos
+            "MLA119443", # Lubricantes y Fluidos
+            "MLA119444", # Performance
+            "MLA119445", # Repuestos Carrocería
+            "MLA119446", # Repuestos Motor
+            "MLA119447", # Repuestos Suspensión y Dirección
+            "MLA119448", # Repuestos Transmisión
+            "MLA119449", # Rodados y Cubiertas
+            "MLA119450", # Seguridad Vehicular
+            "MLA119451", # Servicios para Vehículos
+            "MLA119452", # Tuning y Modificación
+        ]
+        
+        for categoria in categorias_auto[:8]:  # Limitar a 8 categorias principais
+            if len(collected_ids) >= max_limit:
+                break
+                
+            print(f"🔍 Buscando categoria {categoria}...")
+            try:
+                # Buscar produtos desta categoria deste vendedor
+                params = {
+                    "category": categoria,
+                    "seller_id": seller_id,
+                    "limit": 200,  # Limite por categoria
+                    "offset": 0,
+                    "sort": "relevance_desc"
+                }
+                
+                payload = await meli_request("GET", f"/sites/MLB/search", params=params)
+                if payload:
+                    results = payload.get("results", [])
+                    novos_ids = [item.get("id") for item in results if item.get("id") and item.get("id") not in collected_ids]
+                    collected_ids.extend(novos_ids)
+                    print(f"✅ Categoria {categoria}: {len(novos_ids)} produtos novos")
+                    
+                    # Pequena pausa entre categorias
+                    await asyncio.sleep(0.5)
+                    
+            except Exception as e:
+                print(f"⚠️ Erro na categoria {categoria}: {e}")
+                continue
+    
+    # Buscar detalhes dos produtos encontrados
+    print(f"📦 Buscando detalhes de {len(collected_ids)} produtos...")
+    
+    async def fetch_item(item_id: str) -> Optional[Dict]:
+        try:
+            return await meli_request("GET", f"/items/{item_id}", params={"include_attributes": "all"})
+        except Exception as e:
+            logger.error({"event": "ML_ITEM_FETCH_ERROR", "item_id": item_id, "error": str(e)})
+            return None
+    
+    # Processar em lotes para não sobrecarregar a API
+    items = []
+    batch_size = 20  # Processar 20 por vez
+    
+    for i in range(0, len(collected_ids), batch_size):
+        batch_ids = collected_ids[i:i+batch_size]
+        tasks = [fetch_item(item_id) for item_id in batch_ids]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for result in results:
+            if isinstance(result, dict) and result:
+                items.append(result)
+        
+        # Progresso
+        if (i + batch_size) % 100 == 0:
+            print(f"📊 Processados {len(items)} produtos...")
+        
+        # Pequena pausa entre lotes
+        if i + batch_size < len(collected_ids):
+            await asyncio.sleep(0.1)
+    
+    print(f"✅ Finalizado: {len(items)} produtos detalhados obtidos")
+    
+    # Aplicar filtro de dias se necessário
+    if dias:
+        items_filtrados = []
+        for item in items:
+            last_updated = item.get("last_updated") or item.get("stop_time")
+            try:
+                if last_updated:
+                    dt = datetime.fromisoformat(last_updated.replace("Z", "+00:00")).replace(tzinfo=None)
+                    if dt >= datetime.utcnow() - timedelta(days=int(dias)):
+                        items_filtrados.append(item)
+            except Exception:
+                # Se não conseguir parsear a data, incluir o item
+                items_filtrados.append(item)
+        
+        items = items_filtrados
+        print(f"📅 Após filtro de {dias} dias: {len(items)} produtos")
     
     return items, len(items)
 
@@ -937,6 +1184,186 @@ def importar_meli_from_ids(ids: List[str], dias: Optional[int] = None, mode: str
     }
     logger.info({"event": "IMPORT_MELI_STATS", "fetched": stats["fetched"], "novos": stats["novos"], "atualizados": stats["atualizados"], "ignorados_sem_mudanca": stats["ignorados_sem_mudanca"], "modo": stats["modo"]})
     return {"items": normalized, "stats": stats}
+
+def import_user_items(limit: int = 1000, since_hours: int = 24) -> Dict:
+    """
+    Importa itens do usuário usando o novo sistema de tokens permanentes
+    """
+    logger.info({
+        "event": "IMPORT_MELI_START",
+        "limit": limit,
+        "since_hours": since_hours
+    })
+    
+    try:
+        # Obter token para leitura (usa Client Credentials se possível)
+        access_token = get_access_token("read")
+        
+        if not access_token:
+            raise Exception("Não foi possível obter token válido para importação")
+        
+        # Obter ID do vendedor
+        settings = get_settings()
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # Buscar informações do usuário
+        me_url = f"{settings.ML_API_BASE_URL}/users/me"
+        me_response = requests.get(me_url, headers=headers, timeout=20)
+        
+        if me_response.status_code != 200:
+            logger.error({
+                "event": "IMPORT_MELI_AUTH_ERROR",
+                "status": me_response.status_code,
+                "url": me_url
+            })
+            raise Exception("Erro de autenticação ao buscar dados do usuário")
+        
+        user_data = me_response.json()
+        seller_id = user_data.get("id")
+        
+        if not seller_id:
+            raise Exception("Não foi possível obter ID do vendedor")
+        
+        logger.info({
+            "event": "IMPORT_MELI_USER_FOUND",
+            "seller_id": seller_id,
+            "nickname": user_data.get("nickname")
+        })
+        
+        # Calcular data de corte
+        since_date = None
+        if since_hours > 0:
+            since_date = (datetime.utcnow() - timedelta(hours=since_hours)).isoformat()
+        
+        # Buscar itens do vendedor
+        all_items = []
+        offset = 0
+        batch_size = 50
+        
+        while offset < limit:
+            current_batch_size = min(batch_size, limit - offset)
+            
+            logger.info({
+                "event": "IMPORT_MELI_BATCH",
+                "offset": offset,
+                "limit": current_batch_size,
+                "seller_id": seller_id
+            })
+            
+            try:
+                # Buscar IDs dos itens
+                url = f"{settings.ML_API_BASE_URL}/users/{seller_id}/items/search"
+                params = {
+                    "limit": current_batch_size, 
+                    "offset": offset,
+                    "sort": "date_created_desc"
+                }
+                
+                if since_date:
+                    params["since"] = since_date
+                
+                response = requests.get(url, headers=headers, params=params, timeout=20)
+                
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", 2))
+                    logger.info({
+                        "event": "IMPORT_MELI_RATE_LIMIT",
+                        "sleep": retry_after
+                    })
+                    time.sleep(retry_after)
+                    continue
+                
+                response.raise_for_status()
+                data = response.json()
+                items_ids = data.get("results", [])
+                
+                if not items_ids:
+                    logger.info({
+                        "event": "IMPORT_MELI_NO_MORE_ITEMS",
+                        "offset": offset
+                    })
+                    break
+                
+                # Buscar detalhes de cada item
+                for item_id in items_ids:
+                    try:
+                        # Buscar detalhes do item
+                        item_url = f"{settings.ML_API_BASE_URL}/items/{item_id}"
+                        item_response = requests.get(item_url, headers=headers, params={"include_attributes": "all"}, timeout=20)
+                        
+                        if item_response.status_code == 429:
+                            retry_after = int(item_response.headers.get("Retry-After", 1))
+                            time.sleep(retry_after)
+                            continue
+                        
+                        if item_response.status_code != 200:
+                            logger.warning({
+                                "event": "IMPORT_MELI_ITEM_SKIPPED",
+                                "item_id": item_id,
+                                "status": item_response.status_code
+                            })
+                            continue
+                        
+                        item_details = item_response.json()
+                        
+                        # Aqui você processaria o item (salvar no banco, etc.)
+                        all_items.append(item_details)
+                        
+                        logger.info({
+                            "event": "IMPORT_MELI_ITEM_SUCCESS",
+                            "item_id": item_id,
+                            "title": item_details.get("title", "")[:50],
+                            "price": item_details.get("price"),
+                            "status": item_details.get("status")
+                        })
+                        
+                        # Pequena pausa entre itens
+                        time.sleep(0.2)
+                        
+                    except Exception as e:
+                        logger.error({
+                            "event": "IMPORT_MELI_ITEM_ERROR",
+                            "item_id": item_id,
+                            "error": str(e)
+                        })
+                
+                offset += current_batch_size
+                
+                # Pausa entre lotes
+                time.sleep(0.5)
+                
+            except Exception as e:
+                logger.error({
+                    "event": "IMPORT_MELI_BATCH_ERROR",
+                    "offset": offset,
+                    "error": str(e)
+                })
+                break
+        
+        logger.info({
+            "event": "IMPORT_MELI_COMPLETE",
+            "total_items": len(all_items),
+            "limit": limit
+        })
+        
+        return {
+            "success": True,
+            "items_imported": len(all_items),
+            "items": all_items
+        }
+        
+    except Exception as e:
+        logger.error({
+            "event": "IMPORT_MELI_ERROR",
+            "error": str(e)
+        })
+        return {
+            "success": False,
+            "error": str(e),
+            "items_imported": 0,
+            "items": []
+        }
+
 
 if __name__ == "__main__":
     print(refresh_access_token())

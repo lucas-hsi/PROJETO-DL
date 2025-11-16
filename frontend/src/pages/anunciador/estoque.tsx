@@ -1,18 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Package, Filter, RefreshCw, Clock, Plus, BarChart3 } from 'lucide-react';
+import { Search, Package, Filter, RefreshCw, Clock, Plus, BarChart3, Edit3, X, Save, ExternalLink, Layers } from 'lucide-react';
 import PainelLayout from '@/components/layout/PainelLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Table } from '@/components/ui/Table';
 import { Button } from '@/components/ui/Button';
-import ImportarProdutosButton from '@/components/ui/ImportarProdutosButton';
+import ImportarProdutosButtonMelhorado from '@/components/ui/ImportarProdutosButtonMelhorado';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
-import { apiGet, apiPost } from '@/lib/api';
+import { apiGet, apiPost, apiPut } from '@/lib/api';
 import styled from 'styled-components';
 import { colors } from '@/styles/tokens';
 import GaleriaPro from '@/components/GaleriaPro';
+import SearchInput from '@/components/ui/SearchInput';
 
 interface Produto {
   sku: string;
@@ -23,6 +24,10 @@ interface Produto {
   status: 'ativo' | 'inativo';
   imagens?: string[];
   data_importacao?: string;
+  descricao?: string;
+  categoria?: string;
+  part_number?: string;
+  ml_id?: string;
 }
 
 type ProdutoApi = {
@@ -35,6 +40,9 @@ type ProdutoApi = {
   origem: string;
   status: string;
   imagens?: string[];
+  categoria?: string;
+  part_number?: string;
+  ml_id?: string;
 };
 
 function mapProdutoApiToUi(api: ProdutoApi): Produto {
@@ -46,6 +54,10 @@ function mapProdutoApiToUi(api: ProdutoApi): Produto {
     estoque: api.estoque_atual ?? 0,
     status: api.status?.toUpperCase() === 'ATIVO' ? 'ativo' : 'inativo',
     imagens: Array.isArray(api.imagens) ? api.imagens.filter(Boolean) : [],
+    descricao: api.descricao,
+    categoria: api.categoria,
+    part_number: api.part_number,
+    ml_id: api.ml_id,
   };
 }
 
@@ -92,9 +104,7 @@ const FiltersBar = styled.div`
   margin-bottom: 16px;
 `;
 
-const SearchWrap = styled.div`
-  position: relative;
-`;
+ 
 
 const Thumb = styled.div`
   width: 48px; height: 48px; border-radius: 12px; overflow: hidden; background: #f1f5f9;
@@ -108,16 +118,181 @@ const ThumbEmpty = styled.div`
   width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: ${colors.textLight};
 `;
 
-const StatusBadge = styled.span<{ $ativo?: boolean }>`
+const StatusBadge = styled.span<{ $ativo?: boolean; $estoque?: number }>`
   display: inline-block;
-  padding: 6px 10px;
-  border-radius: 9999px;
+  padding: 6px 12px;
+  border-radius: 8px;
   font-size: 12px;
-  ${({ $ativo }) => ($ativo ? `background: #dcfce7; color: #166534;` : `background: #f1f5f9; color: #1f2937;`)}
+  font-weight: 600;
+  ${({ $estoque }) => {
+    if ($estoque === 0) return `background: #fef2f2; color: #dc2626; border: 1px solid rgba(220, 38, 38, 0.15);`;
+    if ($estoque && $estoque > 0) return `background: #f0fdf4; color: #16a34a; border: 1px solid rgba(22, 163, 74, 0.15);`;
+    return `background: #f8fafc; color: #64748b; border: 1px solid rgba(100, 116, 139, 0.15);`;
+  }}
 `;
 
-const OriginBadge = styled.span`
-  display: inline-block; padding: 6px 10px; border-radius: 9999px; font-size: 12px; background: #dbeafe; color: #1e40af;
+const OriginBadge = styled.span<{ $origem?: string }>`
+  display: inline-block; 
+  padding: 6px 12px; 
+  border-radius: 8px; 
+  font-size: 12px; 
+  font-weight: 600;
+  ${({ $origem }) => $origem === 'MERCADO_LIVRE' 
+    ? `background: rgba(0, 102, 255, 0.08); color: #0066FF; border: 1px solid rgba(0, 102, 255, 0.15);`
+    : `background: #dbeafe; color: #1e40af; border: 1px solid rgba(30, 64, 175, 0.15);`
+  }
+`;
+
+ 
+
+const PremiumButton = styled(Button)`
+  height: 42px !important;
+  border-radius: 10px !important;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  transition: all 0.2s ease !important;
+  
+  &:hover {
+    transform: scale(1.02) !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
+  }
+`;
+
+const DrawerOverlay = styled(motion.div)`
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+`;
+
+const DrawerContainer = styled(motion.div)`
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 500px;
+  height: 100vh;
+  background: white;
+  box-shadow: -10px 0 25px rgba(0,0,0,0.1);
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+`;
+
+const DrawerHeader = styled.div`
+  padding: 24px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+`;
+
+const DrawerTitle = styled.h2`
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f2937;
+`;
+
+const DrawerContent = styled.div`
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+`;
+
+const DrawerFooter = styled.div`
+  padding: 24px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+`;
+
+const FormGroup = styled.div`
+  margin-bottom: 20px;
+`;
+
+const FormLabel = styled.label`
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #374151;
+  font-size: 14px;
+`;
+
+const FormInput = styled(Input)`
+  width: 100%;
+`;
+
+const FormTextArea = styled.textarea`
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  resize: vertical;
+  min-height: 100px;
+  
+  &:focus {
+    outline: none;
+    border-color: #5B2EFF;
+    box-shadow: 0 0 0 3px rgba(91, 46, 255, 0.1);
+  }
+`;
+
+const ImageGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+`;
+
+const ImageItem = styled.div`
+  width: 100px;
+  height: 100px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid #e5e7eb;
+  
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+`;
+
+const ErrorMessage = styled.div`
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+`;
+
+const LoadingOverlay = styled.div`
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+`;
+
+const TableRow = styled.tr`
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  
+  &:hover {
+    background-color: #f8fafc;
+  }
 `;
 
 export default function EstoqueAnunciador() {
@@ -127,17 +302,37 @@ export default function EstoqueAnunciador() {
   const [origemFilter, setOrigemFilter] = useState('');
   const [sincronizando, setSincronizando] = useState(false);
   const [statusSincronizacao, setStatusSincronizacao] = useState<SincronizacaoStatus | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
   const { toasts, removeToast, success, error } = useToast();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<Produto | null>(null);
+  const [editedProduct, setEditedProduct] = useState<Produto | null>(null);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  const [drawerError, setDrawerError] = useState<string>('');
 
-  const carregarProdutos = async () => {
+  const carregarProdutos = async (page = currentPage, size = pageSize) => {
     try {
       setLoading(true);
-      const data = await apiGet<{ items: ProdutoApi[] }>('/estoque');
+      const data = await apiGet<{
+        items: ProdutoApi[];
+        page: number;
+        size: number;
+        total: number;
+        total_pages: number;
+      }>(`/estoque?page=${page}&size=${size}&search=${searchTerm}&origem=${origemFilter}`);
+      
       const produtosApi = data.items ?? [];
       const produtosUi = produtosApi.map(mapProdutoApiToUi);
       setProdutos(produtosUi);
-    } catch (error) {
-      console.error('Erro ao carregar produtos:', error);
+      setCurrentPage(data.page);
+      setTotalPages(data.total_pages);
+      setTotalItems(data.total);
+    } catch (err) {
+      console.error('Erro ao carregar produtos:', err);
+      error('Erro ao carregar produtos', 'Não foi possível carregar os produtos do estoque.');
     } finally {
       setLoading(false);
     }
@@ -146,50 +341,170 @@ export default function EstoqueAnunciador() {
   const sincronizarProdutos = async (endpoint: string) => {
     try {
       setSincronizando(true);
-      await apiPost(endpoint);
-      // Iniciar polling do status
-      const interval = setInterval(async () => {
-        try {
-          const status = await apiGet<SincronizacaoStatus>('/estoque/meli/status');
-          setStatusSincronizacao(status);
-          
-          if (status.status === 'concluido' || status.status === 'erro') {
+      
+      // Limpar status anterior
+      setStatusSincronizacao(null);
+      
+      // Fazer a chamada inicial
+      const response = await apiPost(endpoint);
+      
+      // Se for sincronização em background, mostrar mensagem apropriada
+      if (endpoint.includes('/meli/sync/')) {
+        success('Sincronização iniciada!', 'O processo está rodando em background.');
+        
+        // Para sincronizações em background, iniciar polling
+        const interval = setInterval(async () => {
+          try {
+            const status = await apiGet<SincronizacaoStatus>('/estoque/meli/status');
+            setStatusSincronizacao(status);
+            
+            if (status.status === 'concluido' || status.status === 'erro') {
+              clearInterval(interval);
+              setSincronizando(false);
+              if (status.status === 'concluido') {
+                carregarProdutos();
+                success('Sincronização concluída!', `${status.progresso?.atual || 0} produtos processados.`);
+              } else if (status.status === 'erro') {
+                error('Erro na sincronização', 'Verifique os logs para mais detalhes.');
+              }
+            }
+          } catch (statusError) {
+            console.error('Erro ao verificar status:', statusError);
             clearInterval(interval);
             setSincronizando(false);
-            if (status.status === 'concluido') {
-              carregarProdutos();
-              success('Sincronização concluída com sucesso!', 'Os produtos foram atualizados.');
-            } else if (status.status === 'erro') {
-              error('Erro na sincronização', 'Ocorreu um erro ao sincronizar os produtos.');
-            }
           }
-        } catch (statusError) {
-          console.error('Erro ao verificar status:', statusError);
-          clearInterval(interval);
-          setSincronizando(false);
+        }, 3000);
+      } else {
+        // Para importações diretas, mostrar resultado imediatamente
+        if (response && typeof response === 'object') {
+          const importados = (response as any).importados || 0;
+          const tempo = (response as any).tempo_execucao || 'N/A';
+          success('Importação concluída!', `${importados} produtos importados em ${tempo}.`);
+          carregarProdutos();
         }
-      }, 3000);
-    } catch (syncError) {
+        setSincronizando(false);
+      }
+    } catch (syncError: any) {
       console.error('Erro ao sincronizar:', syncError);
-      error('Erro ao sincronizar produtos', 'Verifique sua conexão e tente novamente.');
+      error('Erro ao sincronizar produtos', syncError.message || 'Verifique sua conexão e tente novamente.');
       setSincronizando(false);
     }
   };
 
   useEffect(() => {
-    carregarProdutos();
-  }, []);
+    carregarProdutos(1, pageSize);
+  }, [searchTerm, origemFilter, pageSize]);
 
-  const produtosFiltrados = produtos.filter(produto => {
-    const matchSearch = searchTerm === '' || 
-      produto.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      produto.titulo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      produto.origem.toLowerCase().includes(searchTerm.toLowerCase());
+  useEffect(() => {
+    if (currentPage > 1 || (searchTerm === '' && origemFilter === '')) {
+      carregarProdutos(currentPage, pageSize);
+    }
+  }, [currentPage]);
+
+  const openDrawer = (product: Produto) => {
+    setSelectedProduct(product);
+    setEditedProduct({ ...product });
+    setDrawerOpen(true);
+    setDrawerError('');
+  };
+
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    setSelectedProduct(null);
+    setEditedProduct(null);
+    setDrawerError('');
+  };
+
+  const saveLocal = () => {
+    if (!editedProduct) return;
     
-    const matchOrigem = origemFilter === '' || produto.origem === origemFilter;
+    const updatedProdutos = produtos.map(p => 
+      p.sku === editedProduct.sku ? editedProduct : p
+    );
+    setProdutos(updatedProdutos);
+    success('✔ Produto atualizado localmente', 'As alterações foram salvas temporariamente.');
+  };
+
+  const validateProduct = (product: Produto): string[] => {
+    const errors: string[] = [];
     
-    return matchSearch && matchOrigem;
-  });
+    if (!product.titulo || product.titulo.trim().length < 3) {
+      errors.push('Título inválido (mínimo 3 caracteres)');
+    }
+    
+    if (!product.preco || product.preco <= 0) {
+      errors.push('Preço deve ser maior que zero');
+    }
+    
+    if (product.estoque === undefined || product.estoque < 0) {
+      errors.push('Estoque não pode ser negativo');
+    }
+    
+    if (!product.imagens || product.imagens.length === 0) {
+      errors.push('Pelos menos 1 imagem é obrigatória');
+    }
+    
+    if (!product.categoria || product.categoria.trim().length < 2) {
+      errors.push('Categoria inválida');
+    }
+    
+    if (!product.descricao || product.descricao.trim().length < 10) {
+      errors.push('Descrição muito curta (mínimo 10 caracteres)');
+    }
+    
+    return errors;
+  };
+
+  const updateListingOnMercadoLivre = async (productId: string, payload: any) => {
+    try {
+      setDrawerLoading(true);
+      setDrawerError('');
+      
+      const response = await apiPut(`/ml/products/${productId}`, payload);
+      
+      // Atualizar produto local com dados do ML
+      const updatedProdutos = produtos.map(p => 
+        p.ml_id === productId ? { ...p, ...payload } : p
+      );
+      setProdutos(updatedProdutos);
+      
+      success('✔ Anúncio atualizado no Mercado Livre', 'As alterações foram publicadas com sucesso.');
+      closeDrawer();
+      
+    } catch (err: any) {
+      console.error('Erro ao atualizar no ML:', err);
+      setDrawerError('⚠️ Não foi possível atualizar o anúncio. Verifique os dados e tente novamente.');
+      error('⚠️ Erro ao atualizar no Mercado Livre', err.message || 'Tente novamente mais tarde.');
+    } finally {
+      setDrawerLoading(false);
+    }
+  };
+
+  const handleEditOnMercadoLivre = async () => {
+    if (!editedProduct || !editedProduct.ml_id) {
+      setDrawerError('⚠️ Produto não possui ID do Mercado Livre');
+      return;
+    }
+    
+    const validationErrors = validateProduct(editedProduct);
+    if (validationErrors.length > 0) {
+      setDrawerError(`⚠️ Corrija antes de atualizar:\n• ${validationErrors.join('\n• ')}`);
+      return;
+    }
+    
+    const payload = {
+      title: editedProduct.titulo,
+      price: editedProduct.preco,
+      available_quantity: editedProduct.estoque,
+      pictures: editedProduct.imagens?.map(url => ({ source: url })) || [],
+      description: editedProduct.descricao,
+      category_id: editedProduct.categoria
+    };
+    
+    await updateListingOnMercadoLivre(editedProduct.ml_id, payload);
+  };
+
+
 
   const columns = [
     {
@@ -204,6 +519,9 @@ export default function EstoqueAnunciador() {
         <div>
           <div style={{ fontWeight: 600, color: colors.textDark }}>{value}</div>
           <div style={{ fontSize: 12, color: colors.textLight }}>{item.sku}</div>
+          {item.part_number && (
+            <div style={{ fontSize: 11, color: colors.textLight }}>PN: {item.part_number}</div>
+          )}
         </div>
       ),
       sortable: true,
@@ -228,16 +546,17 @@ export default function EstoqueAnunciador() {
       key: 'origem' as keyof Produto,
       header: 'Origem',
       render: (value: string) => (
-        <OriginBadge>{value === 'MERCADO_LIVRE' ? 'Mercado Livre' : value === 'SHOPIFY' ? 'Shopify' : value}</OriginBadge>
+        <OriginBadge $origem={value}>{value === 'MERCADO_LIVRE' ? 'Mercado Livre' : value === 'SHOPIFY' ? 'Shopify' : value}</OriginBadge>
       ),
       sortable: true,
     },
     {
       key: 'status' as keyof Produto,
       header: 'Status',
-      render: (value: string) => (
-        <StatusBadge $ativo={value === 'ativo'}>{value === 'ativo' ? 'Ativo' : 'Inativo'}</StatusBadge>
-      ),
+      render: (value: string, item: Produto) => {
+        const statusReal = item.estoque > 0 ? 'Ativo' : 'Pausado';
+        return <StatusBadge $estoque={item.estoque}>{statusReal}</StatusBadge>;
+      },
     },
   ];
 
@@ -246,38 +565,31 @@ export default function EstoqueAnunciador() {
       <ToastContainer toasts={toasts} onClose={removeToast} />
       <PainelLayout titulo="Estoque" tipoUsuario="anunciador">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-          <Breadcrumb aria-label="Breadcrumb">
-            <ol style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <li style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: colors.textLight }}>
-                <span>Dashboard</span>
-              </li>
-              <li>
-                <span style={{ color: colors.primary, fontWeight: 500 }}>Estoque</span>
-              </li>
-            </ol>
-          </Breadcrumb>
+          
 
           <Card>
-            <CardHeader>
-              <div>
-                <CardTitle>Gerenciamento de Estoque</CardTitle>
-                <CardDescription>Visualize, gerencie e sincronize todos os produtos do seu inventário</CardDescription>
-              </div>
-            </CardHeader>
             <CardContent>
               <ActionsBar>
-                <Button variant="primary" onClick={() => sincronizarProdutos('/estoque/importar-meli?novos=true')} disabled={sincronizando}>
+                <PremiumButton variant="primary" onClick={() => sincronizarProdutos('/estoque/importar-meli-todos-status')} disabled={sincronizando}>
                   <Plus size={16} />
-                  <span>Sincronizar Novos Anúncios</span>
-                </Button>
-                <Button variant="secondary" onClick={() => sincronizarProdutos('/estoque/importar-meli?dias=15')} disabled={sincronizando}>
+                  <span>Apenas importação completa</span>
+                </PremiumButton>
+                <PremiumButton variant="secondary" onClick={() => sincronizarProdutos('/estoque/importar-meli-incremental?hours=24')} disabled={sincronizando}>
                   <Clock size={16} />
-                  <span>Últimos 15 dias</span>
-                </Button>
-                <Button variant="secondary" onClick={() => sincronizarProdutos('/estoque/importar-meli?limit=500')} disabled={sincronizando}>
+                  <span>Recentes (24h)</span>
+                </PremiumButton>
+                <PremiumButton variant="secondary" onClick={() => sincronizarProdutos('/estoque/importar-meli-incremental?hours=168')} disabled={sincronizando}>
+                  <Clock size={16} />
+                  <span>Últimos 7 dias</span>
+                </PremiumButton>
+                <PremiumButton variant="secondary" onClick={() => sincronizarProdutos('/meli/sync/todos-status-start')} disabled={sincronizando}>
                   <RefreshCw size={16} />
-                  <span>Atualizar Tudo</span>
-                </Button>
+                  <span>Sync Completa (BG)</span>
+                </PremiumButton>
+                <PremiumButton variant="secondary" onClick={() => sincronizarProdutos('/meli/sync/incremental-start')} disabled={sincronizando}>
+                  <RefreshCw size={16} />
+                  <span>Sync Incremental</span>
+                </PremiumButton>
               </ActionsBar>
 
               <AnimatePresence>
@@ -307,18 +619,165 @@ export default function EstoqueAnunciador() {
                   <Filter size={20} color={colors.textLight} />
                   <Select options={origemOptions} value={origemFilter} onChange={setOrigemFilter} placeholder="Filtrar por origem" />
                 </div>
-                <SearchWrap>
-                  <Search size={20} color={colors.textLight} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-                  <Input type="text" placeholder="Buscar por SKU, nome ou origem" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-                </SearchWrap>
+                <SearchInput
+                  value={searchTerm}
+                  onChange={setSearchTerm}
+                  placeholder="Buscar por SKU, nome ou origem"
+                  debounceMs={300}
+                />
               </FiltersBar>
 
-              <ImportarProdutosButton onFinish={carregarProdutos} />
+              <ImportarProdutosButtonMelhorado onFinish={carregarProdutos} />
 
-              <Table data={produtosFiltrados} columns={columns} itemsPerPage={20} />
+              <Table 
+                data={produtos} 
+                columns={columns} 
+                itemsPerPage={pageSize}
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={totalItems}
+                onPageChange={setCurrentPage}
+                onPageSizeChange={setPageSize}
+                pageSizeOptions={[50, 100, 200, 500]}
+                loading={loading}
+                onRowClick={openDrawer}
+                rowComponent={TableRow}
+              />
             </CardContent>
           </Card>
         </motion.div>
+
+        {/* Drawer */}
+        <AnimatePresence>
+          {drawerOpen && (
+            <>
+              <DrawerOverlay
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={closeDrawer}
+              />
+              <DrawerContainer
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              >
+                <DrawerHeader>
+                  <DrawerTitle>Editar Produto</DrawerTitle>
+                  <Button variant="ghost" onClick={closeDrawer}>
+                    <X size={20} />
+                  </Button>
+                </DrawerHeader>
+                
+                <DrawerContent>
+                  {drawerLoading && (
+                    <LoadingOverlay>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Atualizando no Mercado Livre...</div>
+                        <div style={{ color: '#6b7280' }}>Aguarde um momento</div>
+                      </div>
+                    </LoadingOverlay>
+                  )}
+                  
+                  {drawerError && (
+                    <ErrorMessage>
+                      {drawerError.split('\n').map((line, index) => (
+                        <div key={index}>{line}</div>
+                      ))}
+                    </ErrorMessage>
+                  )}
+
+                  {editedProduct && (
+                    <>
+                      <FormGroup>
+                        <FormLabel>Fotos do Produto</FormLabel>
+                        <ImageGrid>
+                          {editedProduct.imagens?.map((img, index) => (
+                            <ImageItem key={index}>
+                              <img src={img} alt={`Imagem ${index + 1}`} />
+                            </ImageItem>
+                          ))}
+                        </ImageGrid>
+                      </FormGroup>
+
+                      <FormGroup>
+                        <FormLabel>Título</FormLabel>
+                        <FormInput
+                          value={editedProduct.titulo}
+                          onChange={(e) => setEditedProduct({ ...editedProduct, titulo: e.target.value })}
+                        />
+                      </FormGroup>
+
+                      <FormGroup>
+                        <FormLabel>SKU</FormLabel>
+                        <FormInput value={editedProduct.sku} disabled />
+                      </FormGroup>
+
+                      {editedProduct.part_number && (
+                        <FormGroup>
+                          <FormLabel>Part Number</FormLabel>
+                          <FormInput value={editedProduct.part_number} disabled />
+                        </FormGroup>
+                      )}
+
+                      <FormGroup>
+                        <FormLabel>Preço (R$)</FormLabel>
+                        <FormInput
+                          type="number"
+                          step="0.01"
+                          value={editedProduct.preco}
+                          onChange={(e) => setEditedProduct({ ...editedProduct, preco: parseFloat(e.target.value) || 0 })}
+                        />
+                      </FormGroup>
+
+                      <FormGroup>
+                        <FormLabel>Estoque</FormLabel>
+                        <FormInput
+                          type="number"
+                          value={editedProduct.estoque}
+                          onChange={(e) => setEditedProduct({ ...editedProduct, estoque: parseInt(e.target.value) || 0 })}
+                        />
+                      </FormGroup>
+
+                      <FormGroup>
+                        <FormLabel>Descrição</FormLabel>
+                        <FormTextArea
+                          value={editedProduct.descricao || ''}
+                          onChange={(e) => setEditedProduct({ ...editedProduct, descricao: e.target.value })}
+                        />
+                      </FormGroup>
+
+                      <FormGroup>
+                        <FormLabel>Categoria</FormLabel>
+                        <FormInput
+                          value={editedProduct.categoria || ''}
+                          onChange={(e) => setEditedProduct({ ...editedProduct, categoria: e.target.value })}
+                        />
+                      </FormGroup>
+                    </>
+                  )}
+                </DrawerContent>
+                
+                <DrawerFooter>
+                  <Button variant="secondary" onClick={closeDrawer}>
+                    Cancelar
+                  </Button>
+                  <Button variant="secondary" onClick={saveLocal}>
+                    <Save size={16} />
+                    Salvar Localmente
+                  </Button>
+                  {editedProduct?.origem === 'MERCADO_LIVRE' && editedProduct.ml_id && (
+                    <PremiumButton variant="primary" onClick={handleEditOnMercadoLivre} disabled={drawerLoading}>
+                      <ExternalLink size={16} />
+                      Editar no Mercado Livre
+                    </PremiumButton>
+                  )}
+                </DrawerFooter>
+              </DrawerContainer>
+            </>
+          )}
+        </AnimatePresence>
       </PainelLayout>
     </>
   );

@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Search, Package, Filter } from 'lucide-react';
+import { Search, Package, Filter, RefreshCw } from 'lucide-react';
 import PainelLayout from '@/components/layout/PainelLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Table } from '@/components/ui/Table';
+import { Button } from '@/components/ui/Button';
 import { apiGet } from '@/lib/api';
 import styled from 'styled-components';
 import { colors } from '@/styles/tokens';
@@ -97,14 +98,28 @@ export default function EstoqueVendedores() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [origemFilter, setOrigemFilter] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
 
-  const carregarProdutos = async () => {
+  const carregarProdutos = async (page = currentPage, size = pageSize) => {
     try {
       setLoading(true);
-      const data = await apiGet<{ items: ProdutoApi[] }>('/estoque');
+      const data = await apiGet<{
+        items: ProdutoApi[];
+        page: number;
+        size: number;
+        total: number;
+        total_pages: number;
+      }>(`/estoque?page=${page}&size=${size}&search=${searchTerm}&origem=${origemFilter}`);
+      
       const produtosApi = data.items ?? [];
       const produtosUi = produtosApi.map(mapProdutoApiToUi);
       setProdutos(produtosUi);
+      setCurrentPage(data.page);
+      setTotalPages(data.total_pages);
+      setTotalItems(data.total);
     } catch (error) {
       console.error('Erro ao carregar produtos:', error);
     } finally {
@@ -112,20 +127,33 @@ export default function EstoqueVendedores() {
     }
   };
 
-  useEffect(() => {
-    carregarProdutos();
-  }, []);
+  const handleSincronizar = async () => {
+    try {
+      setLoading(true);
+      const response = await apiGet('/estoque/sincronizar') as any;
+      if (response?.status === 'ok') {
+        console.log(`Sincronizados ${response?.itens?.length || 0} produtos`);
+        // Recarregar produtos após sincronização
+        carregarProdutos(1, pageSize);
+      }
+    } catch (error) {
+      console.error('Erro ao sincronizar:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const produtosFiltrados = produtos.filter(produto => {
-    const matchSearch = searchTerm === '' || 
-      produto.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      produto.titulo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      produto.origem.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchOrigem = origemFilter === '' || produto.origem === origemFilter;
-    
-    return matchSearch && matchOrigem;
-  });
+  useEffect(() => {
+    carregarProdutos(1, pageSize);
+  }, [searchTerm, origemFilter, pageSize]);
+
+  useEffect(() => {
+    if (currentPage > 1 || (searchTerm === '' && origemFilter === '')) {
+      carregarProdutos(currentPage, pageSize);
+    }
+  }, [currentPage]);
+
+
 
   const columns = [
     {
@@ -198,6 +226,15 @@ export default function EstoqueVendedores() {
                 <CardDescription>Visualize e gerencie todos os produtos do seu inventário</CardDescription>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <Button 
+                  onClick={handleSincronizar} 
+                  loading={loading}
+                  variant="secondary"
+                  size="sm"
+                >
+                  <RefreshCw size={16} />
+                  Sincronizar
+                </Button>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <Filter size={20} color={colors.textLight} />
                   <Select options={origemOptions} value={origemFilter} onChange={setOrigemFilter} placeholder="Filtrar por origem" />
@@ -210,7 +247,18 @@ export default function EstoqueVendedores() {
             </FiltersBar>
           </CardHeader>
           <CardContent>
-            <Table data={produtosFiltrados} columns={columns} itemsPerPage={20} />
+            <Table 
+              data={produtos} 
+              columns={columns} 
+              itemsPerPage={pageSize}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              onPageChange={setCurrentPage}
+              onPageSizeChange={setPageSize}
+              pageSizeOptions={[50, 100, 200, 500]}
+              loading={loading}
+            />
           </CardContent>
         </Card>
       </motion.div>

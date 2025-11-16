@@ -8,6 +8,7 @@ services:
       - PYTHONPATH=/app
     volumes:
       - ./backend:/app
+      - ./backend/.env:/app/.env:rw  # Garante que o .env seja acessível e gravável
     ports:
       - "8000:8000"
     healthcheck:
@@ -36,6 +37,7 @@ services:
         condition: service_started
     volumes:
       - ./backend:/app
+      - ./backend/.env:/app/.env:rw  # Garante que o .env seja acessível e gravável
     command: ["celery", "-A", "app.workers.celery_tasks", "worker", "-B", "-l", "info"]
 
   frontend:
