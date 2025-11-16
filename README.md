@@ -115,3 +115,19 @@ make init-db
 - Projeto roda com `docker-compose up` sem configs extras
 - Layout premium, sidebar flutuante, UX/UI consistente
 - Isolamento do módulo `/anunciador/estoque` garantido para deploy
+## Deploy no Render.com
+- Serviços independentes:
+  - `dl-backend` (Python/FastAPI) — `gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT`
+  - `dl-worker` (Celery) — `celery -A app.workers.celery_tasks worker -B -l info`
+  - `dl-frontend` (Next.js) — `npm install && npm run build` e `npm start`
+- Arquivo `render.yaml` define toda infraestrutura como código.
+- Variáveis:
+  - `DATABASE_URL` (PostgreSQL gerenciado)
+  - `REDIS_URL` (Redis gerenciado)
+  - `NEXT_PUBLIC_API_URL` para apontar o frontend ao backend público
+  - Credenciais ML/Shopify via env vars
+- Passos:
+  1. Conecte o repositório no Render.
+  2. Crie os serviços conforme `render.yaml`.
+  3. Configure variáveis de ambiente.
+  4. Faça deploy; logs devem mostrar inicialização limpa e recursos alocados.

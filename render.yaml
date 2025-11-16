@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: dl-backend
+    env: python
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+    envVars:
+      DATABASE_URL: {{ postgres.internalConnectionString }}
+      REDIS_URL: {{ redis.connectionString }}
+      NEXT_PUBLIC_API_URL: https://dl-frontend.onrender.com
+      ML_CLIENT_ID: {{ ML_CLIENT_ID }}
+      ML_CLIENT_SECRET: {{ ML_CLIENT_SECRET }}
+      ML_REFRESH_TOKEN: {{ ML_REFRESH_TOKEN }}
+      ML_SELLER_ID: {{ ML_SELLER_ID }}
+      SHOPIFY_ACCESS_TOKEN: {{ SHOPIFY_ACCESS_TOKEN }}
+      SHOPIFY_STORE_DOMAIN: {{ SHOPIFY_STORE_DOMAIN }}
+
+  - type: worker
+    name: dl-worker
+    env: python
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.workers.celery_tasks worker -B -l info
+    envVars:
+      DATABASE_URL: {{ postgres.internalConnectionString }}
+      REDIS_URL: {{ redis.connectionString }}
+
+  - type: web
+    name: dl-frontend
+    env: node
+    region: oregon
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      NEXT_PUBLIC_API_URL: https://dl-backend.onrender.com
