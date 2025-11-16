@@ -46,7 +46,7 @@ services:
     autoDeploy: true
     buildCommand: echo "Building backend..."
 
-  - type: background
+  - type: private_service
     name: dl-worker
     env: docker
     plan: starter
