@@ -1,15 +1,9 @@
-FROM node:20-alpine
-
+FROM node:18 AS builder
 WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
 
-COPY package.json /app/package.json
-COPY package-lock.json /app/package-lock.json
-RUN npm install --legacy-peer-deps
-
-COPY src /app/src
-COPY tsconfig.json /app/tsconfig.json
-COPY next.config.mjs /app/next.config.mjs
-COPY src/styles /app/src/styles
-
-EXPOSE 3000
-CMD ["npm", "run", "dev"]
+FROM nginx:stable
+COPY --from=builder /app/out /usr/share/nginx/html
