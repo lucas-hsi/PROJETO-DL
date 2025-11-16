@@ -1,0 +1,39 @@
+name: Deploy DL Sistema
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "📁 Entrando na pasta do projeto..."
+            cd /opt/projeto-dl/app
+
+            echo "📥 Atualizando repositório Git..."
+            git pull
+
+            echo "🐳 Buildando imagens Docker..."
+            docker-compose -f docker-compose.prod.yml build --no-cache
+
+            echo "🚀 Subindo containers..."
+            docker-compose -f docker-compose.prod.yml up -d
+
+            echo "🧱 Executando migrations..."
+            docker-compose -f docker-compose.prod.yml exec -T backend alembic upgrade head
+
+            echo "✅ Deploy finalizado com sucesso!"
