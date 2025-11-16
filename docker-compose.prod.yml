@@ -1,13 +1,10 @@
-version: "3.9"
-
 services:
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     env_file:
-      - ./.env
-      - ./backend/.env
+      - ../.env
     environment:
       - PYTHONPATH=/app
     ports:
@@ -28,8 +25,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     env_file:
-      - ./.env
-      - ./backend/.env
+      - ../.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,6 +37,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    env_file:
+      - ../.env
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     depends_on:
@@ -60,6 +58,8 @@ services:
 
   postgres:
     image: postgres:16
+    env_file:
+      - ../.env
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
