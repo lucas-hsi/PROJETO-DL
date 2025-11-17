@@ -187,6 +187,8 @@ services:
       - dl_network
     depends_on:
       - backend
+    ports:
+      - "3000:3000"
     logging:
       driver: "json-file"
       options:
