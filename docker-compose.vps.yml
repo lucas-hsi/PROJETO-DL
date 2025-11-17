@@ -120,7 +120,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: ["celery", "-A", "app.workers.celery_tasks", "worker", "-B", "-l", "info", "--concurrency=2", "--max-tasks-per-child=1000"]
+    command: ["celery", "-A", "app.workers.celery_tasks", "worker", "-l", "info", "--concurrency=2", "--max-tasks-per-child=1000"]
     logging:
       driver: "json-file"
       options:
@@ -154,7 +154,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: ["python", "-m", "app.main", "--webhooks-only"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 30s
@@ -208,8 +208,9 @@ services:
       - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-dl_user}:${POSTGRES_PASSWORD:-dl_pass}@postgres:5432/${POSTGRES_DB:-dl_auto_pecas}
       - REDIS_URL=redis://redis:6379/0
     volumes:
-      - ./logs:/app/logs
       - ./backend:/app
+      - ./logs:/app/logs
+      - ./celery-data:/var/run/celery
     networks:
       - dl_network
     depends_on:
@@ -217,7 +218,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: ["celery", "-A", "app.workers.celery_tasks", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    command: ["celery", "-A", "app.workers.celery_tasks", "beat", "-l", "info", "--scheduler", "celery.beat:PersistentScheduler"]
     logging:
       driver: "json-file"
       options:
