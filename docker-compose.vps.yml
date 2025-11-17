@@ -1,0 +1,270 @@
+version: '3.8'
+
+services:
+  # 🗄️ PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: dl_sistema_postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dl_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dl_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-dl_auto_pecas}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backup:/backup
+    networks:
+      - dl_network
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dl_user} -d ${POSTGRES_DB:-dl_auto_pecas}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 🔴 Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: dl_sistema_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - dl_network
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 🚀 Backend FastAPI
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+      args:
+        - BUILD_ENV=production
+    container_name: dl_sistema_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-dl_user}:${POSTGRES_PASSWORD:-dl_pass}@postgres:5432/${POSTGRES_DB:-dl_auto_pecas}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./backend:/app
+    networks:
+      - dl_network
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 👷 Worker Celery
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: dl_sistema_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-dl_user}:${POSTGRES_PASSWORD:-dl_pass}@postgres:5432/${POSTGRES_DB:-dl_auto_pecas}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./backend:/app
+    networks:
+      - dl_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.workers.celery_tasks", "worker", "-B", "-l", "info", "--concurrency=2", "--max-tasks-per-child=1000"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 🌐 Webhooks Service
+  webhooks:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: dl_sistema_webhooks
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-dl_user}:${POSTGRES_PASSWORD:-dl_pass}@postgres:5432/${POSTGRES_DB:-dl_auto_pecas}
+      - REDIS_URL=redis://redis:6379/0
+      - WEBHOOK_PORT=8080
+    volumes:
+      - ./logs:/app/logs
+      - ./backend:/app
+    networks:
+      - dl_network
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "app.main", "--webhooks-only"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 🎨 Frontend Next.js
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: dl_sistema_frontend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - dl_network
+    depends_on:
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 🔄 Scheduler Celery Beat
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: dl_sistema_scheduler
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-dl_user}:${POSTGRES_PASSWORD:-dl_pass}@postgres:5432/${POSTGRES_DB:-dl_auto_pecas}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./backend:/app
+    networks:
+      - dl_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.workers.celery_tasks", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 🌐 Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: dl_sistema_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx
+      - ./frontend/.next/static:/var/www/frontend/_next/static:ro
+    networks:
+      - dl_network
+    depends_on:
+      - frontend
+      - backend
+      - webhooks
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  dl_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
