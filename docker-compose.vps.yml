@@ -232,15 +232,4 @@ services:
     networks:
       - dl_network
 
-networks:
-  dl_network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
-
-volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
+  
