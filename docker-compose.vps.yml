@@ -225,27 +225,12 @@ services:
       - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
-      - ./logs/nginx:/var/log/nginx
-      - ./frontend/.next/static:/var/www/frontend/_next/static:ro
-    networks:
-      - dl_network
+      - ./frontend:/var/www/frontend:ro
     depends_on:
       - frontend
       - backend
-      - webhooks
-    healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    networks:
+      - dl_network
 
 networks:
   dl_network:
