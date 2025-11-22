@@ -27,6 +27,10 @@ configure_logging()
 
 app = FastAPI(title="DL Auto Peças API")
 
+@app.get("/health")
+def health_basic():
+    return {"status": "ok"}
+
 # CORS
 origins = [
     "http://localhost:3000",
