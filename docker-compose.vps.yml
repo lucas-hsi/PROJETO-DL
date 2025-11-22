@@ -225,7 +225,7 @@ services:
       - "443:443"
     volumes:
       - /var/www/dl_sistema/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./frontend:/var/www/frontend:ro
+      - /var/www/dl_sistema/frontend:/var/www/frontend:ro
     depends_on:
       - frontend
       - backend
