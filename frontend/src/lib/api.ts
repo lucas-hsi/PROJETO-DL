@@ -1,3 +1,5 @@
+// Base da API obtida via variável de ambiente (sem hardcode)
+// Domínio oficial: https://app.dlautopecas.com.br/api
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export async function apiGet<T>(path: string): Promise<T> {

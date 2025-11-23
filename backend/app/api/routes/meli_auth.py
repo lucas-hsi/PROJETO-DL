@@ -96,6 +96,8 @@ def meli_callback(code: str = Query(...)):
         })
         return JSONResponse({"error": str(e)}, status_code=500)
 
+# Redirect URI oficial do ambiente: app.dlautopecas.com.br/auth/meli/callback
+
 
 @router.get("/meli/debug-token")
 def meli_debug_token():
