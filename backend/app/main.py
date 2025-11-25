@@ -22,6 +22,7 @@ from app.core.database import init_db, engine
 from sqlmodel import Session
 from sqlalchemy import text
 from fastapi import APIRouter
+from app.services.mercadolivre_service import refresh_if_needed
 
 configure_logging()
 
@@ -71,6 +72,10 @@ def on_startup():
             create_if_not_exists(session, "vendedor@dl.com", "123456", "vendedor")
             create_if_not_exists(session, "anunciador@dl.com", "123456", "anunciador")
             create_if_not_exists(session, "gestor@dl.com", "123456", "gestor")
+    except Exception:
+        pass
+    try:
+        refresh_if_needed()
     except Exception:
         pass
     

@@ -115,6 +115,12 @@ services:
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.workers.celery_tasks", "worker", "-l", "info", "--concurrency=2", "--max-tasks-per-child=1000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('redis',6379)); s.close(); print('ok')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     logging:
       driver: "json-file"
       options:
@@ -196,7 +202,7 @@ services:
     volumes:
       - ./backend:/app
       - ./logs:/app/logs
-      - ./celery-data:/var/run/celery
+      - celerybeat_data:/var/lib/celerybeat
     networks:
       - dl_network
     depends_on:
@@ -204,7 +210,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: ["celery", "-A", "app.workers.celery_tasks", "beat", "-l", "info", "--scheduler", "celery.beat:PersistentScheduler"]
+    command: ["celery", "-A", "app.workers.celery_tasks", "beat", "-l", "info", "--schedule=/var/lib/celerybeat/beat.db"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('redis',6379)); s.close(); print('ok')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     logging:
       driver: "json-file"
       options:
@@ -220,3 +232,4 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  celerybeat_data:

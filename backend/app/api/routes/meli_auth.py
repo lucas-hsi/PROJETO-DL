@@ -6,6 +6,7 @@ import requests
 
 from app.core.logger import logger
 from app.core.config import get_settings
+from app.services.mercadolivre_service import save_tokens_to_db
 
 
 router = APIRouter()
@@ -61,23 +62,16 @@ def meli_callback(code: str = Query(...)):
 
         access_token = data.get("access_token")
         refresh_token = data.get("refresh_token")
+        expires_in = data.get("expires_in")
+        token_type = data.get("token_type")
+        scope = data.get("scope")
+        user_id = data.get("user_id")
 
         try:
-            settings = get_settings()
-            if access_token:
-                setattr(settings, "ML_ACCESS_TOKEN", access_token)
-            if refresh_token:
-                setattr(settings, "ML_REFRESH_TOKEN", refresh_token)
-            expires_in = data.get("expires_in")
-            settings.APP_VERSION = settings.APP_VERSION  # touch to avoid lint
-            try:
-                from fastapi import FastAPI
-            except Exception:
-                pass
-            _persist_tokens_to_env(access_token, refresh_token)
+            save_tokens_to_db(access_token, refresh_token, expires_in, token_type, scope, user_id)
             logger.info({"event": "ML_TOKEN_EXCHANGE_OK", "status": status_code})
         except Exception as e:
-            logger.error({"event": "ML_TOKEN_UPDATE_FAIL", "error": str(e)})
+            logger.error({"event": "ML_TOKEN_SAVE_DB_FAIL", "error": str(e)})
 
         html = (
             "<html><body style='font-family:Arial;text-align:center;padding:50px'>"
@@ -101,44 +95,24 @@ def meli_callback(code: str = Query(...)):
 
 @router.get("/meli/debug-token")
 def meli_debug_token():
-    settings = get_settings()
-    raw_access = getattr(settings, "ML_ACCESS_TOKEN", "")
-    raw_refresh = getattr(settings, "ML_REFRESH_TOKEN", "")
-    def _mask(v: str) -> str:
-        return v[:6] + "***" if isinstance(v, str) and v else None
-    return {
-        "raw_access_token": _mask(raw_access),
-        "raw_refresh_token": _mask(raw_refresh),
-        "expires_in": None,
-        "seller_id": getattr(settings, "ML_SELLER_ID", None),
-        "env_loaded": True,
-    }
+    try:
+        from sqlmodel import Session, select
+        from app.core.database import engine
+        from app.models.ml_token import MlToken
+        with Session(engine) as s:
+            row = s.exec(select(MlToken).where(MlToken.id == 1)).first()
+        def _mask(v: str) -> str:
+            return v[:6] + "***" if isinstance(v, str) and v else None
+        return {
+            "raw_access_token": _mask(getattr(row, "access_token", None) or ""),
+            "raw_refresh_token": _mask(getattr(row, "refresh_token", None) or ""),
+            "expires_in": getattr(row, "expires_in", None),
+            "seller_id": getattr(row, "user_id", None),
+            "env_loaded": False,
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def _persist_tokens_to_env(access_token: str | None, refresh_token: str | None) -> None:
-    try:
-        env_path = os.path.join(os.getcwd(), ".env")
-        env_path = os.path.normpath(env_path)
-        lines: list[str] = []
-        try:
-            with open(env_path, "r", encoding="utf-8") as f:
-                lines = f.read().splitlines()
-        except FileNotFoundError:
-            lines = []
-        def upsert_line(key: str, value: str | None):
-            if value is None:
-                return
-            found = False
-            for i, ln in enumerate(lines):
-                if ln.startswith(f"{key}="):
-                    lines[i] = f"{key}={value}"
-                    found = True
-                    break
-            if not found:
-                lines.append(f"{key}={value}")
-        upsert_line("ML_ACCESS_TOKEN", access_token)
-        upsert_line("ML_REFRESH_TOKEN", refresh_token)
-        with open(env_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-    except Exception as e:
-        logger.error({"event": "ML_ENV_PERSIST_FAIL", "error": str(e)})
+    return None

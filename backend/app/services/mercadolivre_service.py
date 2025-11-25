@@ -10,7 +10,9 @@ import aiohttp
 from app.core.config import get_settings
 from app.core.logger import logger
 from app.models.ml_log import MLLog
-from app.core.database import get_session
+from app.core.database import get_session, engine
+from sqlmodel import Session, select
+from app.models.ml_token import MlToken
 from app.services.meli_hash_utils import compute_meli_item_hash
 from app.services.ml_token_manager import (
     ml_token_manager, 
@@ -108,8 +110,20 @@ def get_access_token(operation_type: str = "read") -> str:
     
     def _get_token_internal():
         try:
-            # Usar novo sistema de tokens
-            token = get_ml_token(operation_type)
+            token = None
+            if operation_type == "read":
+                token = ml_token_manager.get_client_credentials_token()
+            else:
+                with Session(engine) as s:
+                    row = s.exec(select(MlToken).where(MlToken.id == 1)).first()
+                if row and row.access_token:
+                    token = row.access_token
+                else:
+                    access, _ = refresh_access_token()
+                    if access:
+                        with Session(engine) as s:
+                            row = s.exec(select(MlToken).where(MlToken.id == 1)).first()
+                        token = (row.access_token if row else access)
             
             if not token:
                 # Se não conseguiu token, tentar client credentials
@@ -156,14 +170,7 @@ def get_access_token(operation_type: str = "read") -> str:
                     })
                     raise MeliAuthError(500, "api.mercadolibre.com/users/me", f"Erro ao testar token: {e}")
             else:
-                # Para Client Credentials (leitura), apenas logar que está válido
-                logger.info({
-                    "event": "ML_ACCESS_TOKEN_VALID",
-                    "operation_type": operation_type,
-                    "token_type": "client_credentials",
-                    "status": "sucesso",
-                    "timestamp": datetime.utcnow().isoformat()
-                })
+                logger.info({"event": "ML_ACCESS_TOKEN_VALID", "operation_type": operation_type, "token_type": "client_credentials", "status": "sucesso", "timestamp": datetime.utcnow().isoformat()})
             
             return token
                 
@@ -187,6 +194,41 @@ class MeliAuthError(Exception):
         super().__init__(f"ML auth error {status} at {endpoint}")
 
 
+def load_tokens_from_db() -> MlToken | None:
+    with Session(engine) as s:
+        return s.exec(select(MlToken).where(MlToken.id == 1)).first()
+
+
+def save_tokens_to_db(access_token: str | None, refresh_token: str | None, expires_in: int | None, token_type: str | None, scope: str | None, user_id: str | None) -> None:
+    now = datetime.utcnow()
+    with Session(engine) as s:
+        row = s.exec(select(MlToken).where(MlToken.id == 1)).first()
+        if row is None:
+            row = MlToken(id=1)
+        if access_token is not None:
+            row.access_token = access_token
+        if refresh_token is not None:
+            row.refresh_token = refresh_token
+        row.expires_in = expires_in
+        row.token_type = token_type
+        row.scope = scope
+        row.user_id = user_id
+        row.updated_at = now
+        if row.created_at is None:
+            row.created_at = now
+        s.add(row)
+        s.commit()
+
+
+def is_expired(row: MlToken | None) -> bool:
+    if row is None:
+        return True
+    if row.expires_in is None or row.updated_at is None:
+        return True
+    margin = 300
+    return datetime.utcnow() >= row.updated_at + timedelta(seconds=int(row.expires_in or 0) - margin)
+
+
 def refresh_access_token() -> tuple[str | None, str | None]:
     """
     Renova o token de acesso usando o refresh token, com retry automático.
@@ -195,20 +237,18 @@ def refresh_access_token() -> tuple[str | None, str | None]:
     
     def _refresh_token_internal() -> tuple[str | None, str | None]:
         url = f"{settings.ML_API_BASE_URL}/oauth/token"
-        
-        # Verifica se o refresh token é válido
-        if not settings.ML_REFRESH_TOKEN or (isinstance(settings.ML_REFRESH_TOKEN, str) and settings.ML_REFRESH_TOKEN.startswith("TG-")):
-            logger.error({
-                "event": "ML_REFRESH_TOKEN_INVALID",
-                "refresh_token": "TG-*" if settings.ML_REFRESH_TOKEN else "None"
-            })
+        with Session(engine) as s:
+            row = s.exec(select(MlToken).where(MlToken.id == 1)).first()
+        refresh_val = row.refresh_token if row else None
+        if not refresh_val:
+            logger.error({"event": "ML_REFRESH_TOKEN_MISSING"})
             return None, None
-            
+        
         payload = {
             "grant_type": "refresh_token",
             "client_id": settings.ML_CLIENT_ID,
             "client_secret": settings.ML_CLIENT_SECRET,
-            "refresh_token": settings.ML_REFRESH_TOKEN,
+            "refresh_token": refresh_val,
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
         
@@ -258,6 +298,10 @@ def refresh_access_token() -> tuple[str | None, str | None]:
             data = body
             new_access = data.get("access_token")
             new_refresh = data.get("refresh_token")
+            expires_in = data.get("expires_in")
+            token_type = data.get("token_type")
+            scope = data.get("scope")
+            user_id = data.get("user_id")
             
             # Mascara tokens para logging
             masked = dict(data)
@@ -274,23 +318,9 @@ def refresh_access_token() -> tuple[str | None, str | None]:
                     "body": masked,
                 })
                 
-                try:
-                    from app.api.routes.meli_auth import _persist_tokens_to_env
-                    if new_access:
-                        setattr(settings, "ML_ACCESS_TOKEN", new_access)
-                    if new_refresh:
-                        setattr(settings, "ML_REFRESH_TOKEN", new_refresh)
-                    _persist_tokens_to_env(new_access, new_refresh)
-                    
-                    logger.info({
-                        "event": "ML_TOKENS_PERSISTED",
-                        "access_token_preview": new_access[:6] + "***" if len(new_access) > 6 else "***",
-                        "refresh_token_preview": new_refresh[:6] + "***" if new_refresh and len(new_refresh) > 6 else "None"
-                    })
-                    
-                except Exception as e:
-                    logger.error({"event": "ML_REFRESH_PERSIST_FAIL", "error": str(e)})
-                    
+                save_tokens_to_db(new_access, new_refresh, expires_in, token_type, scope, user_id)
+                logger.info({"event": "ML_TOKENS_SAVED_DB"})
+                
                 return new_access, new_refresh
             else:
                 logger.warning({"event": "IMPORT_MELI_TOKEN_REFRESH_FAIL", "status": status_code, "body": masked})
@@ -360,15 +390,24 @@ def exchange_tg_for_access_token(tg: str) -> str:
             "body": masked,
         })
 
-        try:
-            from app.api.routes.meli_auth import _persist_tokens_to_env
-            if access_token:
-                setattr(settings, "ML_ACCESS_TOKEN", access_token)
-            if refresh_token:
-                setattr(settings, "ML_REFRESH_TOKEN", refresh_token)
-            _persist_tokens_to_env(access_token, refresh_token)
-        except Exception as e:
-            logger.error({"event": "ML_TG_PERSIST_FAIL", "error": str(e)})
+        expires_in = data.get("expires_in")
+        token_type = data.get("token_type")
+        scope = data.get("scope")
+        user_id = data.get("user_id")
+        now = datetime.utcnow()
+        with Session(engine) as s:
+            row = s.exec(select(MlToken).where(MlToken.id == 1)).first() or MlToken(id=1)
+            row.access_token = access_token
+            row.refresh_token = refresh_token
+            row.expires_in = expires_in
+            row.token_type = token_type
+            row.scope = scope
+            row.user_id = user_id
+            row.updated_at = now
+            if row.created_at is None:
+                row.created_at = now
+            s.add(row)
+            s.commit()
 
         if not access_token:
             raise MeliAuthError(500, url, "Token de acesso ausente após troca TG")
@@ -492,6 +531,18 @@ def _truncate_body(data: Dict | str, max_len: int = 500) -> str:
         return s[:max_len]
     except Exception:
         return ""
+
+
+def refresh_if_needed() -> None:
+    with Session(engine) as s:
+        row = s.exec(select(MlToken).where(MlToken.id == 1)).first()
+    if row is None or (row and (row.expires_in is None or row.updated_at is None)):
+        access, _ = refresh_access_token()
+        return
+    margin = 300
+    if datetime.utcnow() >= row.updated_at + timedelta(seconds=int(row.expires_in or 0) - margin):
+        access, _ = refresh_access_token()
+        return
 
 
 async def _fetch_json(session: aiohttp.ClientSession, url: str, headers: Dict[str, str], rl: RateLimiter, max_retries: int = 2) -> Optional[Dict]:

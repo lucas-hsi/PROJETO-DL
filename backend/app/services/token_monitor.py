@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from app.core.config import get_settings
-from app.services.mercadolivre_service import refresh_access_token
+from app.services.mercadolivre_service import refresh_access_token, load_tokens_from_db, is_expired
 
 logger = logging.getLogger(__name__)
 
@@ -54,16 +54,13 @@ class TokenMonitor:
     async def _check_and_refresh_token(self):
         """Verifica e renova o token se necessário"""
         try:
-            # Verifica se o token atual está perto de expirar
             if await self._should_refresh_token():
                 logger.info("Token próximo de expirar, renovando...")
                 access_token, refresh_token = refresh_access_token()
                 
                 if access_token and refresh_token:
                     logger.info("Token renovado com sucesso")
-                    # Atualiza as configurações em memória
-                    self.settings.ML_ACCESS_TOKEN = access_token
-                    self.settings.ML_REFRESH_TOKEN = refresh_token
+                    pass
                 else:
                     logger.error("Falha ao renovar token")
                     
@@ -72,17 +69,12 @@ class TokenMonitor:
             
     async def _should_refresh_token(self) -> bool:
         """Verifica se o token deve ser renovado"""
-        # Se não houver refresh token, não podemos renovar
-        if not self.settings.ML_REFRESH_TOKEN:
+        row = load_tokens_from_db()
+        if row is None:
             return False
-            
-        # Verifica se o access token atual é válido
-        if not self.settings.ML_ACCESS_TOKEN:
+        if not getattr(row, "access_token", None):
             return True
-            
-        # Aqui você pode adicionar lógica para verificar a expiração do token
-        # Por enquanto, vamos renovar a cada 6 horas para garantir
-        return True
+        return is_expired(row)
         
     async def force_refresh(self) -> tuple[Optional[str], Optional[str]]:
         """Força a renovação do token"""

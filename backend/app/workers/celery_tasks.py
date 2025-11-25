@@ -51,9 +51,9 @@ def sync_stock_task():
 
 # Agendamento periódico (necessita executar worker com -B para rodar beat embutido)
 celery.conf.beat_schedule = {
-    "refresh-ml-token-every-10-min": {
+    "refresh-ml-token-every-40-min": {
         "task": "ml.refresh_token",
-        "schedule": timedelta(minutes=10),
+        "schedule": timedelta(minutes=40),
     },
     "sync-stock-every-10-min": {
         "task": "estoque.sync",
