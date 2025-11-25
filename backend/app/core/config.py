@@ -2,6 +2,11 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    model_config = {
+        "extra": "allow",
+        "env_file": ".env",
+        "case_sensitive": False,
+    }
     APP_ENV: str = "development"
     APP_VERSION: str = "0.1.0"
 
@@ -49,9 +54,7 @@ class Settings(BaseSettings):
     WEBHOOK_SECRET: str = "dl-auto-pecas-webhook-secret-2024"
     BACKEND_URL: str = "http://localhost:8000"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    
 
 
 _settings: Settings | None = None
