@@ -24,11 +24,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
   # 🔴 Redis Cache & Queue
   redis:
@@ -40,25 +35,15 @@ services:
       - redis_data:/data
     networks:
       - dl_network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
   # 🚀 Backend FastAPI
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile
       args:
         - BUILD_ENV=production
+    image: dl_sistema-backend
     container_name: dl_sistema_backend
     restart: unless-stopped
     env_file:
@@ -68,8 +53,6 @@ services:
       - ENVIRONMENT=production
       - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-dl_user}:${POSTGRES_PASSWORD:-dl_pass}@postgres:5432/${POSTGRES_DB:-dl_auto_pecas}
       - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ./backend:/app
     networks:
       - dl_network
     ports:
@@ -85,28 +68,22 @@ services:
       timeout: 5s
       retries: 10
       start_period: 5s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
   # 👷 Worker Celery
   worker:
     build:
       context: ./backend
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile
     container_name: dl_sistema_worker
     restart: unless-stopped
     env_file:
       - .env
+    image: dl_sistema-worker
     environment:
       - PYTHONPATH=/app
       - ENVIRONMENT=production
       - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-dl_user}:${POSTGRES_PASSWORD:-dl_pass}@postgres:5432/${POSTGRES_DB:-dl_auto_pecas}
       - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ./backend:/app
     networks:
       - dl_network
     depends_on:
@@ -115,23 +92,12 @@ services:
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.workers.celery_tasks", "worker", "-l", "info", "--concurrency=2", "--max-tasks-per-child=1000"]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('redis',6379)); s.close(); print('ok')"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
   # 🌐 Webhooks Service
   webhooks:
     build:
       context: ./backend
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile
     container_name: dl_sistema_webhooks
     restart: unless-stopped
     env_file:
@@ -142,35 +108,23 @@ services:
       - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-dl_user}:${POSTGRES_PASSWORD:-dl_pass}@postgres:5432/${POSTGRES_DB:-dl_auto_pecas}
       - REDIS_URL=redis://redis:6379/0
       - WEBHOOK_PORT=8080
-    volumes:
-      - ./backend:/app
     networks:
       - dl_network
     ports:
       - "127.0.0.1:8080:8080"
+    image: dl_sistema-webhooks
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
   # 🎨 Frontend Next.js
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile
     container_name: dl_sistema_frontend
     restart: unless-stopped
     env_file:
@@ -184,12 +138,13 @@ services:
       - backend
     ports:
       - "127.0.0.1:3000:3000"
+    image: dl_sistema-frontend
 
   # 🔄 Scheduler Celery Beat
   scheduler:
     build:
       context: ./backend
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.scheduler
     container_name: dl_sistema_scheduler
     restart: unless-stopped
     env_file:
@@ -199,10 +154,6 @@ services:
       - ENVIRONMENT=production
       - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-dl_user}:${POSTGRES_PASSWORD:-dl_pass}@postgres:5432/${POSTGRES_DB:-dl_auto_pecas}
       - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ./backend:/app
-      - ./logs:/app/logs
-      - celerybeat_data:/var/lib/celerybeat
     networks:
       - dl_network
     depends_on:
@@ -211,19 +162,7 @@ services:
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.workers.celery_tasks", "beat", "-l", "info", "--schedule=/var/lib/celerybeat/beat.db"]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('redis',6379)); s.close(); print('ok')"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # 🌐 Nginx Reverse Proxy
+    image: dl_sistema-scheduler
 
 networks:
   dl_network:
